@@ -9,6 +9,7 @@ enum AccountRoute: Hashable {
 struct AccountView: View {
     @Environment(AppModel.self) private var model
     @State private var showLogin = false
+    @State private var cacheBytes = 0
     @State private var showLogoutConfirm = false
 
     var body: some View {
@@ -98,6 +99,26 @@ struct AccountView: View {
 
             Section {
                 HStack {
+                    Text("图片缓存")
+                    Spacer()
+                    Text(cacheDescription)
+                        .foregroundStyle(.secondary)
+                }
+                Button("清除缓存", role: .destructive) {
+                    Task {
+                        await ImageLoader.shared.clearCaches()
+                        await refreshCacheUsage()
+                    }
+                }
+                .disabled(cacheBytes == 0)
+            } header: {
+                Text("存储")
+            } footer: {
+                Text("帖子里的图片会缓存在本地，重新打开主题时不再重新下载。")
+            }
+
+            Section {
+                HStack {
                     Text("版本")
                     Spacer()
                     Text(appVersion)
@@ -114,7 +135,11 @@ struct AccountView: View {
             }
         }
         .navigationTitle("我的")
-        .refreshable { await model.refreshMember() }
+        .refreshable {
+            await model.refreshMember()
+            await refreshCacheUsage()
+        }
+        .task { await refreshCacheUsage() }
         .sheet(isPresented: $showLogin) {
             LoginView()
         }
@@ -141,6 +166,15 @@ struct AccountView: View {
             }
             #endif
         }
+    }
+
+    private var cacheDescription: String {
+        guard cacheBytes > 0 else { return "无" }
+        return ByteCountFormatter.string(fromByteCount: Int64(cacheBytes), countStyle: .file)
+    }
+
+    private func refreshCacheUsage() async {
+        cacheBytes = await ImageLoader.shared.diskUsage()
     }
 
     private var appVersion: String {
