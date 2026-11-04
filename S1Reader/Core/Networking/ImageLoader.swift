@@ -59,6 +59,24 @@ actor ImageLoader {
         return image
     }
 
+    /// Raw bytes at full resolution, for saving to the photo library.
+    func originalData(for url: URL) async -> Data? {
+        guard let (data, response) = try? await session.data(from: url),
+              let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            return nil
+        }
+        return data
+    }
+
+    /// Drops the given images from both cache layers, leaving other threads alone.
+    func clearImages(for urls: [URL]) {
+        for url in urls {
+            cache.removeObject(forKey: url as NSURL)
+            session.configuration.urlCache?.removeCachedResponse(for: URLRequest(url: url))
+        }
+    }
+
     /// Bytes currently held by the on-disk image cache.
     func diskUsage() -> Int {
         session.configuration.urlCache?.currentDiskUsage ?? 0

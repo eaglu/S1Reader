@@ -4,6 +4,7 @@ import SwiftUI
 enum AccountRoute: Hashable {
     case notices
     case favorites
+    case imageCache
 }
 
 struct AccountView: View {
@@ -104,6 +105,9 @@ struct AccountView: View {
                     Text(cacheDescription)
                         .foregroundStyle(.secondary)
                 }
+                NavigationLink(value: AccountRoute.imageCache) {
+                    Label("图片缓存管理", systemImage: "photo.on.rectangle.angled")
+                }
                 Button("清除缓存", role: .destructive) {
                     Task {
                         await ImageLoader.shared.clearCaches()
@@ -156,6 +160,7 @@ struct AccountView: View {
             switch route {
             case .notices: NoticesView()
             case .favorites: FavoritesView()
+            case .imageCache: ImageCacheView()
             }
         }
         .task {

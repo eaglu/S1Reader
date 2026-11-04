@@ -156,6 +156,8 @@ struct ThreadDetailView: View {
     @State private var visiblePid: String?
     @State private var didRestorePosition = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var threadImageCount = 0
+    @State private var cacheNotice: String?
 
     init(summary: ThreadSummary) {
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
@@ -229,6 +231,9 @@ struct ThreadDetailView: View {
         }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: model.posts.count) {
+            registerThreadImages()
+        }
         .task {
             await model.loadIfNeeded()
             await model.restoreReadingPosition()
@@ -251,6 +256,16 @@ struct ThreadDetailView: View {
             if let pid = ProcessInfo.processInfo.environment["S1_SCROLL"], !pid.isEmpty {
                 try? await Task.sleep(for: .milliseconds(300))
                 visiblePid = pid
+            }
+            // S1_CLEAR_IMAGES=1 drops this thread's cached pictures so the eviction
+            // path can be checked without tapping the menu.
+            if ProcessInfo.processInfo.environment["S1_CLEAR_IMAGES"] == "1" {
+                try? await Task.sleep(for: .milliseconds(1500))
+                let before = await ImageLoader.shared.diskUsage()
+                clearThreadImageCache()
+                try? await Task.sleep(for: .milliseconds(800))
+                let after = await ImageLoader.shared.diskUsage()
+                print("S1_CLEAR_IMAGES \(before) -> \(after)")
             }
             #endif
         }
@@ -305,10 +320,22 @@ struct ThreadDetailView: View {
                     } label: {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }
+                    Button {
+                        clearThreadImageCache()
+                    } label: {
+                        Label("清除本帖图片缓存（\(threadImageCount) 张）", systemImage: "trash")
+                    }
+                    .disabled(threadImageCount == 0)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
+        }
+        .alert(cacheNotice ?? "", isPresented: Binding(
+            get: { cacheNotice != nil },
+            set: { if !$0 { cacheNotice = nil } }
+        )) {
+            Button("好", role: .cancel) { cacheNotice = nil }
         }
         .alert("收藏失败", isPresented: Binding(
             get: { favoriteError != nil },
@@ -335,6 +362,32 @@ struct ThreadDetailView: View {
         }
         .sheet(item: $viewerImage) { reference in
             ImageViewer(url: reference.url)
+        }
+    }
+
+    /// Remembers which images this thread uses so they can be dropped individually.
+    private func registerThreadImages() {
+        let tid = model.summary.tid
+        let title = model.title
+        let htmls = model.posts.map(\.message)
+        guard !htmls.isEmpty else { return }
+
+        Task {
+            let urls = await Task.detached(priority: .utility) {
+                htmls.flatMap { HTMLParser.imageURLs(in: $0) }
+            }.value
+            ImageCacheIndex.shared.register(tid: tid, title: title, urls: urls)
+            threadImageCount = ImageCacheIndex.shared.urls(for: tid).count
+        }
+    }
+
+    private func clearThreadImageCache() {
+        let tid = model.summary.tid
+        let removed = threadImageCount
+        Task {
+            await ImageCacheIndex.shared.remove(tid: tid)
+            threadImageCount = 0
+            cacheNotice = removed > 0 ? "已清除本帖的 \(removed) 张图片缓存" : "本帖没有图片缓存"
         }
     }
 
@@ -459,6 +512,7 @@ private struct ImageViewer: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var scale: CGFloat = 1
+    @State private var message: String?
 
     var body: some View {
         NavigationStack {
@@ -474,13 +528,35 @@ private struct ImageViewer: View {
                     .frame(maxWidth: .infinity)
             }
             .background(Color.black)
+            .alert(message ?? "", isPresented: Binding(
+                get: { message != nil },
+                set: { if !$0 { message = nil } }
+            )) {
+                Button("好", role: .cancel) { message = nil }
+            }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        Task { await save() }
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("关闭") { dismiss() }
                 }
             }
             .toolbarBackground(.black, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
+        }
+    }
+
+    private func save() async {
+        do {
+            try await ImageSaver.save(url)
+            message = "已保存到相册"
+        } catch {
+            message = error.localizedDescription
         }
     }
 }

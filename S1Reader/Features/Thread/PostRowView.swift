@@ -63,6 +63,7 @@ struct PostContentView: View {
     var onImageTap: (URL) -> Void = { _ in }
 
     @State private var smileys: [URL: UIImage] = [:]
+    @State private var saveMessage: String?
 
     private enum Block {
         case text(Text)
@@ -119,8 +120,21 @@ struct PostContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            save(url)
+                        } label: {
+                            Label("保存到相册", systemImage: "square.and.arrow.down")
+                        }
+                    }
                 }
             }
+        }
+        .alert(saveMessage ?? "", isPresented: Binding(
+            get: { saveMessage != nil },
+            set: { if !$0 { saveMessage = nil } }
+        )) {
+            Button("好", role: .cancel) { saveMessage = nil }
         }
         .task(id: nodes) {
             let urls = nodes.compactMap { node -> URL? in
@@ -131,6 +145,17 @@ struct PostContentView: View {
                 if let image = await ImageLoader.shared.image(for: url) {
                     smileys[url] = Self.resized(image, height: 20)
                 }
+            }
+        }
+    }
+
+    private func save(_ url: URL) {
+        Task {
+            do {
+                try await ImageSaver.save(url)
+                saveMessage = "已保存到相册"
+            } catch {
+                saveMessage = error.localizedDescription
             }
         }
     }

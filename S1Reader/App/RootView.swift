@@ -57,6 +57,10 @@ struct RootView: View {
             tab = 1
             accountPath.append(AccountRoute.favorites)
             return
+        case "images":
+            tab = 1
+            accountPath.append(AccountRoute.imageCache)
+            return
         default:
             break
         }

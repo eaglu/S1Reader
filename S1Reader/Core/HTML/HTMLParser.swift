@@ -187,6 +187,14 @@ enum HTMLParser {
         return nodes
     }
 
+    /// Non-smiley images referenced by a post, used for cache bookkeeping.
+    static func imageURLs(in html: String) -> [URL] {
+        parse(html).compactMap { node in
+            if case .image(let url, let isSmiley) = node, !isSmiley { return url }
+            return nil
+        }
+    }
+
     // MARK: - Helpers
 
     private static func apply(_ style: Style, to string: inout AttributedString) {

@@ -78,7 +78,8 @@ https://stage1st.com/2b/api/mobile/index.php?version=4&module=<module>&mobile=2
 - 登录成功路径尚未用真实账号验证；登录失败会提示"登录失败，请检查账号密码"
 - 提醒列表依赖 `mynotelist`，该 module 在未登录时返回 503；若登录后仍返回 503，界面会显示"服务端暂时不可用"
 - 头像地址由 uid 推导（uid 464256 → `https://avatar.stage1st.com/000/46/42/56_avatar_middle.jpg`）；用户未设置头像时回退为首字圆形
-- 图片缓存：内存（NSCache，上限约 96MB 解码像素）+ 磁盘（URLCache，300MB，`Library/Caches/.../s1-images`）；图片在后台线程按最长边 1600px 降采样解码，避免长帖里的大图吃内存；「我的 → 存储」可查看占用并清除
+- 图片缓存：内存（NSCache，上限约 96MB 解码像素）+ 磁盘（URLCache，300MB，`Library/Caches/.../s1-images`）；图片在后台线程按最长边 1600px 降采样解码，避免长帖里的大图吃内存；「我的 → 存储」可查看占用、清除全部，或进「图片缓存管理」按主题逐个清除（主题菜单里也有「清除本帖图片缓存」）
+- 保存图片：帖子里的图片长按（或全屏查看时点左上角按钮）可保存到相册，存的是原图而不是 1600px 的缓存版本
 - S1 的 503（Discuz 的 "System Error" 页面）既表示服务器繁忙，也表示当前会话无权阅读该帖；客户端对 502/503/504/429 与网络错误自动重试 2 次，仍失败时错误页提供「重试」「在浏览器中打开」「登录」
 - 阅读位置按主题保存在 UserDefaults（`s1.readingPositions`，最多 300 条），按楼层号换算页码，主题被删楼或页码变化时最多偏移一楼
 - 未实现：短消息、用户资料页、搜索、编辑/删除自己的帖子、深色模式细节打磨
@@ -97,6 +98,8 @@ SIMCTL_CHILD_S1_TAB=account SIMCTL_CHILD_S1_OPEN=login ...
 - `S1_TAB=account` 打开"我的"标签
 - `S1_OPEN=forum:<fid>` / `thread:<tid>` / `login` / `notices` / `favorites`
 - `S1_SCROLL=<pid>` 打开主题后跳到指定楼层，用来检查滚动与阅读位置保存
+- `S1_CLEAR_IMAGES=1` 打开主题后清掉本帖图片缓存，并打印磁盘缓存占用变化，用来检查按主题清理
+- `S1_SAVE_IMAGE=<url>` 启动时保存一张图片到相册，用来检查相册写入（模拟器无法点击菜单）
 - `S1_LOADMORE=<n>` 打开主题后连续追加 n 页，用来检查分页与页码显示
 - `S1_DEMO=1` 注入假账号（S1er / 管理员）、假提醒与假收藏，用于在没有真实账号时检查登录后的界面：
 
