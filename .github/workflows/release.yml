@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.2.0). Defaults to v<MARKETING_VERSION>'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          MARKETING_VERSION=$(grep -m1 'MARKETING_VERSION = ' S1Reader.xcodeproj/project.pbxproj | sed 's/.*= \(.*\);/\1/')
+          BUILD_NUMBER=$(grep -m1 'CURRENT_PROJECT_VERSION = ' S1Reader.xcodeproj/project.pbxproj | sed 's/.*= \(.*\);/\1/')
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            if [ "${{ github.ref_type }}" = "tag" ]; then TAG="${{ github.ref_name }}"; else TAG="v$MARKETING_VERSION"; fi
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "marketing=$MARKETING_VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG (version $MARKETING_VERSION build $BUILD_NUMBER)"
+
+      - name: Build for device (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project S1Reader.xcodeproj \
+            -scheme S1Reader \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tee build.log | tail -40
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: Package IPA
+        id: package
+        run: |
+          APP="build/Build/Products/Release-iphoneos/S1Reader.app"
+          test -d "$APP"
+          rm -rf Payload S1Reader.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry "S1Reader-${{ steps.version.outputs.tag }}.ipa" Payload
+          rm -rf Payload
+          ls -lh S1Reader-*.ipa
+          echo "ipa=S1Reader-${{ steps.version.outputs.tag }}.ipa" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ipa
+          path: S1Reader-*.ipa
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: S1 Reader ${{ steps.version.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: S1Reader-*.ipa
+          body: |
+            **未签名 IPA**（`CODE_SIGNING_ALLOWED=NO`），仅用于自行签名安装。
+
+            安装方式（任选其一，需要自备 Apple ID 或开发者证书）：
+            - Sideloadly / AltStore / SideStore：选择本页 `S1Reader-*.ipa`，用你的 Apple ID 重签名后安装
+            - Xcode：`xcodebuild -project S1Reader.xcodeproj -scheme S1Reader -destination 'generic/platform=iOS' build`，然后自行签名
+
+            版本：${{ steps.version.outputs.marketing }}（build ${{ steps.version.outputs.build }}）
