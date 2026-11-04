@@ -60,7 +60,7 @@ final class ThreadDetailViewModel {
                 views = info.views
             }
             loadedPages = 1
-            hasMore = !result.posts.isEmpty
+            hasMore = posts.count < totalPosts
             didLoad = true
         } catch {
             errorMessage = error.localizedDescription
@@ -109,10 +109,14 @@ final class ThreadDetailViewModel {
 
     func loadMore() async {
         guard hasMore, !isLoading, !isLoadingMore else { return }
+        let next = loadedPages + 1
+        guard next <= pageCount else {
+            hasMore = false
+            return
+        }
         isLoadingMore = true
         defer { isLoadingMore = false }
 
-        let next = loadedPages + 1
         do {
             let result: ThreadPage = try await APIClient.shared.fetch(
                 "viewthread",
@@ -120,11 +124,18 @@ final class ThreadDetailViewModel {
             )
             let existing = Set(posts.map(\.pid))
             let fresh = result.posts.filter { !existing.contains($0.pid) }
+            if fresh.isEmpty {
+                // S1 replays the last page for pages past the end, so a page
+                // without new posts means we are done; keep loadedPages put.
+                hasMore = false
+                return
+            }
             posts.append(contentsOf: fresh)
             loadedPages = next
-            if result.posts.isEmpty || fresh.isEmpty {
-                hasMore = false
+            if let info = result.thread {
+                totalPosts = info.replies + 1
             }
+            hasMore = posts.count < totalPosts
         } catch {
             errorMessage = error.localizedDescription
             hasMore = false
@@ -222,6 +233,13 @@ struct ThreadDetailView: View {
             #if DEBUG
             // S1_SCROLL=<pid> jumps to a post so scrolling/saving can be checked
             // from the command line (the simulator cannot be tapped).
+            // S1_LOADMORE=<n> appends n pages so pagination can be checked.
+            if let raw = ProcessInfo.processInfo.environment["S1_LOADMORE"], let times = Int(raw) {
+                for _ in 0..<max(0, times) {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    await model.loadMore()
+                }
+            }
             if let pid = ProcessInfo.processInfo.environment["S1_SCROLL"], !pid.isEmpty {
                 try? await Task.sleep(for: .milliseconds(300))
                 visiblePid = pid

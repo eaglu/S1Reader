@@ -93,6 +93,7 @@ SIMCTL_CHILD_S1_TAB=account SIMCTL_CHILD_S1_OPEN=login ...
 - `S1_TAB=account` 打开"我的"标签
 - `S1_OPEN=forum:<fid>` / `thread:<tid>` / `login` / `notices` / `favorites`
 - `S1_SCROLL=<pid>` 打开主题后跳到指定楼层，用来检查滚动与阅读位置保存
+- `S1_LOADMORE=<n>` 打开主题后连续追加 n 页，用来检查分页与页码显示
 - `S1_DEMO=1` 注入假账号（S1er / 管理员）、假提醒与假收藏，用于在没有真实账号时检查登录后的界面：
 
 ```bash
