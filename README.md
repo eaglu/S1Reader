@@ -1,5 +1,8 @@
 # S1 Reader
 
+[![CI](https://github.com/eaglu/S1Reader/actions/workflows/ci.yml/badge.svg)](https://github.com/eaglu/S1Reader/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/eaglu/S1Reader)](https://github.com/eaglu/S1Reader/releases)
+
 非官方的 Stage1st（S1）论坛 iOS 客户端，SwiftUI 编写，无第三方依赖。
 
 ## 功能
