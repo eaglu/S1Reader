@@ -15,19 +15,32 @@ permissions:
 jobs:
   ipa:
     name: Build unsigned IPA
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select Xcode 27
+        run: |
+          for candidate in /Applications/Xcode_27.2.app /Applications/Xcode_27.1.app /Applications/Xcode_27.app; do
+            if [ -d "$candidate" ]; then sudo xcode-select -s "$candidate"; break; fi
+          done
+          xcodebuild -version
+          echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "Simulator SDK: $(xcrun --sdk iphonesimulator --show-sdk-version)"
+
       - name: Resolve version
         id: version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           MARKETING_VERSION=$(grep -m1 'MARKETING_VERSION = ' S1Reader.xcodeproj/project.pbxproj | sed 's/.*= \(.*\);/\1/')
           BUILD_NUMBER=$(grep -m1 'CURRENT_PROJECT_VERSION = ' S1Reader.xcodeproj/project.pbxproj | sed 's/.*= \(.*\);/\1/')
-          TAG="${{ github.event.inputs.tag }}"
+          TAG="$INPUT_TAG"
           if [ -z "$TAG" ]; then
-            if [ "${{ github.ref_type }}" = "tag" ]; then TAG="${{ github.ref_name }}"; else TAG="v$MARKETING_VERSION"; fi
+            if [ "$REF_TYPE" = "tag" ]; then TAG="$REF_NAME"; else TAG="v$MARKETING_VERSION"; fi
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "marketing=$MARKETING_VERSION" >> "$GITHUB_OUTPUT"
@@ -86,3 +99,5 @@ jobs:
             - Xcode：`xcodebuild -project S1Reader.xcodeproj -scheme S1Reader -destination 'generic/platform=iOS' build`，然后自行签名
 
             版本：${{ steps.version.outputs.marketing }}（build ${{ steps.version.outputs.build }}）
+
+            自 0.4.0 起使用 Xcode 27 / iOS 27 SDK 构建，在 iOS 26 及以上系统会呈现 Liquid Glass 外观（iOS 27 SDK 下无法关闭），iOS 17/18 仍为经典外观。

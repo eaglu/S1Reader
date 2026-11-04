@@ -13,15 +13,22 @@ concurrency:
 jobs:
   build:
     name: Build (simulator)
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show toolchain
+      - name: Select Xcode 27
         run: |
+          for candidate in /Applications/Xcode_27.2.app /Applications/Xcode_27.1.app /Applications/Xcode_27.app; do
+            if [ -d "$candidate" ]; then sudo xcode-select -s "$candidate"; break; fi
+          done
           xcodebuild -version
-          xcrun simctl list runtimes | tail -5
+          echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "Simulator SDK: $(xcrun --sdk iphonesimulator --show-sdk-version)"
+
+      - name: Show simulators
+        run: xcrun simctl list runtimes | tail -5
 
       - name: Build for simulator
         run: |

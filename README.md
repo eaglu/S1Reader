@@ -30,6 +30,8 @@ open S1Reader.xcodeproj
 
 选择 `S1Reader` scheme 和任意 iPhone 模拟器（iOS 17+）运行即可，无需配置任何 API Key。
 
+构建环境：Xcode 27 / iOS 27 SDK（CI 使用 GitHub Actions 的 `xcode-27` 镜像）。用 iOS 26+ SDK 编译时，在 iOS 26 及以上系统会呈现 Liquid Glass 外观；用 iOS 27 SDK 构建时该外观由系统强制启用，无法通过 `UIDesignRequiresCompatibility` 关闭，iOS 17/18 设备仍是经典外观。
+
 命令行构建：
 
 ```bash
