@@ -103,7 +103,33 @@ actor APIClient {
         }
     }
 
+    /// Retries transient failures: S1 answers 503 (a bare Discuz "System Error"
+    /// page) both when it is overloaded and when a request is rate limited.
     private func rawFetch(_ module: String, _ params: [String: String]) async throws -> Data {
+        var attempt = 0
+        while true {
+            do {
+                return try await performFetch(module, params)
+            } catch let error as APIError {
+                attempt += 1
+                guard attempt < 3, Self.isRetryable(error) else { throw error }
+                try? await Task.sleep(for: .milliseconds(attempt == 1 ? 400 : 1200))
+            }
+        }
+    }
+
+    private static func isRetryable(_ error: APIError) -> Bool {
+        switch error {
+        case .http(let code):
+            return code == 429 || code == 502 || code == 503 || code == 504
+        case .transport:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func performFetch(_ module: String, _ params: [String: String]) async throws -> Data {
         guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw APIError.badURL
         }
@@ -284,10 +310,16 @@ actor APIClient {
     }
 
     private static func httpError(_ code: Int) -> APIError {
-        if code == 503 {
-            return .server("S1 服务端暂时不可用，请稍后再试")
+        switch code {
+        case 503:
+            // Discuz answers 503 for an overloaded server *and* for threads the
+            // current session is not allowed to read, so say both.
+            return .server("S1 返回 503：服务器繁忙，或本帖需要登录／更高的阅读权限。请稍后重试。")
+        case 429:
+            return .server("请求太频繁，请稍后再试")
+        default:
+            return .http(code)
         }
-        return .http(code)
     }
 
     private static func formEncode(_ fields: [String: String]) -> Data {

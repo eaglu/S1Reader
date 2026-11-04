@@ -174,6 +174,14 @@ struct ThreadDetailView: View {
                     } actions: {
                         Button("重试") { Task { await model.reload() } }
                             .buttonStyle(.borderedProminent)
+                        if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
+                            Link("在浏览器中打开", destination: webURL)
+                                .buttonStyle(.bordered)
+                        }
+                        if !app.isLoggedIn {
+                            Button("登录") { showLogin = true }
+                                .buttonStyle(.bordered)
+                        }
                     }
                     .padding(.top, 60)
                 }
