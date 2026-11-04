@@ -1,0 +1,98 @@
+# S1 Reader
+
+非官方的 Stage1st（S1）论坛 iOS 客户端，SwiftUI 编写，无第三方依赖。
+
+## 功能
+
+- 版块列表：按分类展示全部版块，含子版块、今日发帖数
+- 主题列表：分页加载、下拉刷新、"只看今日新帖"
+- 帖子阅读：
+  - Discuz HTML 转 AttributedString（粗体、斜体、颜色、链接、引用）
+  - 麻将脸内联显示
+  - 图片按需加载（带 Referer，防盗链）、点击全屏缩放
+  - 分页加载、跳到指定页、只看楼主
+- 账号：使用 S1 账号登录（支持安全提问），登录态通过 Cookie 保持
+- 收藏主题 / 取消收藏（收藏夹支持左滑移除）
+- 提醒与收藏夹列表（提醒数显示在"我的"标签角标）
+- 回复主题（发送后自动跳到最新页并滚动到自己的楼层）
+- 会话过期自动回到未登录态（服务端返回 `to_login` 时清空 Cookie）
+
+## 运行
+
+```bash
+open S1Reader.xcodeproj
+```
+
+选择 `S1Reader` scheme 和任意 iPhone 模拟器（iOS 17+）运行即可，无需配置任何 API Key。
+
+命令行构建：
+
+```bash
+xcodebuild -project S1Reader.xcodeproj -scheme S1Reader \
+  -destination 'platform=iOS Simulator,name=iPhone 17' build
+```
+
+## 项目结构
+
+```
+S1Reader/
+├── App/                 入口与根导航（TabView + NavigationStack）
+├── Core/
+│   ├── Networking/      APIClient（Discuz 移动端 API）、解码辅助、图片加载
+│   ├── Models/          Forum / Thread / Post / Account
+│   ├── HTML/            HTMLParser：帖子 HTML → 带样式的 AttributedString
+│   └── Store/           AppModel：全局状态（版块、登录态）
+└── Features/
+    ├── Boards/          版块列表
+    ├── Threads/         主题列表
+    ├── Thread/          帖子详情、楼层渲染、回复、跳页
+    └── Account/         登录、提醒、收藏夹
+```
+
+## 数据来源
+
+使用 Discuz! 移动端 API（匿名可读）：
+
+```
+https://stage1st.com/2b/api/mobile/index.php?version=4&module=<module>&mobile=2
+```
+
+用到的 module：`forumindex`、`forumdisplay`、`viewthread`、`login`、`sendreply`、`favthread`、`mynotelist`、`myfavthread`。
+
+注意：
+
+- 图片、头像都需要 `Referer: https://stage1st.com/2b/`，否则返回 403
+- 帖子 HTML 中的实体可能被二次编码（`&amp;amp;`），解析时连续解码两次
+- 部分 module（如 `mypost`、`search`）在服务端有 PHP 告警，返回非 JSON，客户端会显示错误而不是崩溃
+
+## 已知限制 / TODO
+
+- 发新主题尚未实现（`newthread` 需要处理分类信息 threadtypes）
+- 登录成功路径尚未用真实账号验证；登录失败会提示"登录失败，请检查账号密码"
+- 提醒列表依赖 `mynotelist`，该 module 在未登录时返回 503；若登录后仍返回 503，界面会显示"服务端暂时不可用"
+- 头像接口（`avatar.stage1st.com/avatar.php`）对任意 uid 都返回 404 占位 SVG，因此楼层头像暂用首字圆形代替
+- 未实现：短消息、用户资料页、搜索、编辑/删除自己的帖子、深色模式细节打磨
+- App 图标为脚本生成的占位图
+
+## 开发小工具
+
+Debug 构建支持环境变量直达页面，方便截图和调试（模拟器无法点击 UI 时尤其有用）：
+
+```bash
+SIMCTL_CHILD_S1_OPEN="forum:6" xcrun simctl launch booted com.faye.S1Reader
+SIMCTL_CHILD_S1_OPEN="thread:2206666" ...
+SIMCTL_CHILD_S1_TAB=account SIMCTL_CHILD_S1_OPEN=login ...
+```
+
+- `S1_TAB=account` 打开"我的"标签
+- `S1_OPEN=forum:<fid>` / `thread:<tid>` / `login` / `notices` / `favorites`
+- `S1_DEMO=1` 注入假账号（S1er / 管理员）、假提醒与假收藏，用于在没有真实账号时检查登录后的界面：
+
+```bash
+SIMCTL_CHILD_S1_DEMO=1 SIMCTL_CHILD_S1_TAB=account \
+  SIMCTL_CHILD_S1_OPEN=notices xcrun simctl launch booted com.faye.S1Reader
+```
+
+## 免责声明
+
+非官方客户端，与 Stage1st 官方无关。请遵守论坛规则，不要用于爬取或批量抓取内容。
