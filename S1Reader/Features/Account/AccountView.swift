@@ -15,10 +15,8 @@ struct AccountView: View {
         List {
             Section {
                 HStack(spacing: 14) {
-                    if model.isLoggedIn, let avatar = model.member?.avatarURL {
-                        RemoteImage(url: avatar, contentMode: .fill)
-                            .frame(width: 52, height: 52)
-                            .clipShape(Circle())
+                    if model.isLoggedIn, let member = model.member {
+                        AvatarView(uid: member.uid, name: member.username, size: 52)
                     } else {
                         Image(systemName: "person.crop.circle.fill")
                             .font(.system(size: 52))
@@ -102,7 +100,7 @@ struct AccountView: View {
                 HStack {
                     Text("版本")
                     Spacer()
-                    Text("0.2.0")
+                    Text(appVersion)
                         .foregroundStyle(.secondary)
                 }
                 HStack {
@@ -143,6 +141,12 @@ struct AccountView: View {
             }
             #endif
         }
+    }
+
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+        return "\(version) (\(build))"
     }
 
     private var subtitle: String {

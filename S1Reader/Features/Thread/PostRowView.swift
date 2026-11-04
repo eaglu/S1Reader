@@ -30,14 +30,7 @@ struct PostRowView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.15))
-                Text(String(post.author.prefix(1)))
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 24, height: 24)
+            AvatarView(uid: post.authorID, name: post.author, size: 24)
 
             Text(post.author)
                 .font(.subheadline.weight(.semibold))

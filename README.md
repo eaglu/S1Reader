@@ -10,6 +10,8 @@
 - 版块列表：按分类展示全部版块，含子版块、今日发帖数
 - 主题列表：分页加载、下拉刷新、"只看今日新帖"
 - 帖子阅读：
+  - 记住每个主题的阅读位置，下次打开直接回到上次那一楼
+  - 楼层头像（无头像或加载失败时回退为首字圆形）
   - Discuz HTML 转 AttributedString（粗体、斜体、颜色、链接、引用）
   - 麻将脸内联显示
   - 图片按需加载（带 Referer，防盗链）、点击全屏缩放
@@ -73,7 +75,8 @@ https://stage1st.com/2b/api/mobile/index.php?version=4&module=<module>&mobile=2
 - 发新主题尚未实现（`newthread` 需要处理分类信息 threadtypes）
 - 登录成功路径尚未用真实账号验证；登录失败会提示"登录失败，请检查账号密码"
 - 提醒列表依赖 `mynotelist`，该 module 在未登录时返回 503；若登录后仍返回 503，界面会显示"服务端暂时不可用"
-- 头像接口（`avatar.stage1st.com/avatar.php`）对任意 uid 都返回 404 占位 SVG，因此楼层头像暂用首字圆形代替
+- 头像地址由 uid 推导（uid 464256 → `https://avatar.stage1st.com/000/46/42/56_avatar_middle.jpg`）；用户未设置头像时回退为首字圆形
+- 阅读位置按主题保存在 UserDefaults（`s1.readingPositions`，最多 300 条），按楼层号换算页码，主题被删楼或页码变化时最多偏移一楼
 - 未实现：短消息、用户资料页、搜索、编辑/删除自己的帖子、深色模式细节打磨
 - App 图标为脚本生成的占位图
 
@@ -89,6 +92,7 @@ SIMCTL_CHILD_S1_TAB=account SIMCTL_CHILD_S1_OPEN=login ...
 
 - `S1_TAB=account` 打开"我的"标签
 - `S1_OPEN=forum:<fid>` / `thread:<tid>` / `login` / `notices` / `favorites`
+- `S1_SCROLL=<pid>` 打开主题后跳到指定楼层，用来检查滚动与阅读位置保存
 - `S1_DEMO=1` 注入假账号（S1er / 管理员）、假提醒与假收藏，用于在没有真实账号时检查登录后的界面：
 
 ```bash

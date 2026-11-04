@@ -17,6 +17,8 @@ final class ThreadDetailViewModel {
     var loadedPages = 0
     /// Set right after a successful reply so the list can scroll to the new post.
     var focusPid: String?
+    /// Post to scroll to when reopening a thread that was read before.
+    var resumePid: String?
 
     private var hasMore = true
     private var didLoad = false
@@ -62,6 +64,19 @@ final class ThreadDetailViewModel {
             didLoad = true
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Jumps back to the post the reader stopped at last time.
+    func restoreReadingPosition() async {
+        guard let saved = ReadingProgressStore.shared.position(for: summary.tid) else { return }
+        let perPage = max(1, self.perPage)
+        let targetPage = max(1, Int(ceil(Double(saved.position) / Double(perPage))))
+        if targetPage != loadedPages {
+            await loadPage(targetPage)
+        }
+        if posts.contains(where: { $0.pid == saved.pid }) {
+            resumePid = saved.pid
         }
     }
 
@@ -127,13 +142,15 @@ struct ThreadDetailView: View {
     @State private var onlyOriginalPoster = false
     @State private var isFavorite = false
     @State private var favoriteError: String?
+    @State private var visiblePid: String?
+    @State private var didRestorePosition = false
+    @State private var saveTask: Task<Void, Never>?
 
     init(summary: ThreadSummary) {
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
@@ -175,18 +192,42 @@ struct ThreadDetailView: View {
                         .padding(.vertical, 20)
                 }
             }
+            .scrollTargetLayout()
         }
+        .scrollPosition(id: $visiblePid, anchor: .top)
         .contentMargins(.bottom, 72, for: .scrollContent)
         .onChange(of: model.focusPid) { _, pid in
             guard let pid else { return }
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(pid, anchor: .top)
-            }
+            didRestorePosition = true
+            withAnimation(.easeInOut(duration: 0.25)) { visiblePid = pid }
+            model.focusPid = nil
         }
+        .onChange(of: visiblePid) { _, pid in
+            saveReadingPosition(pid)
+        }
+        .onDisappear {
+            saveReadingPosition(visiblePid, immediate: true)
         }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.loadIfNeeded() }
+        .task {
+            await model.loadIfNeeded()
+            await model.restoreReadingPosition()
+            didRestorePosition = true
+            if let pid = model.resumePid {
+                model.resumePid = nil
+                try? await Task.sleep(for: .milliseconds(250))
+                visiblePid = pid
+            }
+            #if DEBUG
+            // S1_SCROLL=<pid> jumps to a post so scrolling/saving can be checked
+            // from the command line (the simulator cannot be tapped).
+            if let pid = ProcessInfo.processInfo.environment["S1_SCROLL"], !pid.isEmpty {
+                try? await Task.sleep(for: .milliseconds(300))
+                visiblePid = pid
+            }
+            #endif
+        }
         .refreshable { await model.reload() }
         .overlay {
             if model.isLoading && model.posts.isEmpty {
@@ -268,6 +309,27 @@ struct ThreadDetailView: View {
         }
         .sheet(item: $viewerImage) { reference in
             ImageViewer(url: reference.url)
+        }
+    }
+
+    /// Stores the top-most visible post so the thread reopens in place.
+    private func saveReadingPosition(_ pid: String?, immediate: Bool = false) {
+        guard didRestorePosition,
+              let pid,
+              let post = model.posts.first(where: { $0.pid == pid }) else { return }
+
+        let tid = model.summary.tid
+        let position = post.position
+        saveTask?.cancel()
+
+        guard !immediate else {
+            ReadingProgressStore.shared.save(tid: tid, pid: pid, position: position)
+            return
+        }
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            ReadingProgressStore.shared.save(tid: tid, pid: pid, position: position)
         }
     }
 
