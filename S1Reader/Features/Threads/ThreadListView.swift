@@ -224,8 +224,8 @@ private struct ThreadRow: View {
             }
 
             HStack(spacing: 10) {
-                Label(thread.author, systemImage: "person")
-                Label("\(thread.replies)", systemImage: "bubble.left")
+                IconText(systemImage: "person", text: thread.author)
+                IconText(systemImage: "bubble.left", text: "\(thread.replies)")
                 if newReplies > 0 {
                     Text("+\(newReplies)")
                         .font(.caption2.weight(.bold))
@@ -235,12 +235,11 @@ private struct ThreadRow: View {
                         .foregroundStyle(Color.accentColor)
                         .accessibilityLabel("上次浏览后新增 \(newReplies) 条回复")
                 }
-                Label(Formatters.compactCount(thread.views), systemImage: "eye")
+                IconText(systemImage: "eye", text: Formatters.compactCount(thread.views))
                 Spacer(minLength: 0)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            .labelStyle(.titleAndIcon)
 
             HStack(spacing: 4) {
                 Text(thread.lastPoster)

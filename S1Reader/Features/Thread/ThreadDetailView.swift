@@ -567,9 +567,11 @@ struct ThreadHeaderView: View {
             Text(title)
                 .font(.title3.weight(.semibold))
             HStack(spacing: 12) {
-                Label(author, systemImage: "person")
-                Label("\(posts) 楼", systemImage: "bubble.left.and.bubble.right")
-                Label(Formatters.compactCount(views), systemImage: "eye")
+                if !author.isEmpty {
+                    IconText(systemImage: "person", text: author)
+                }
+                IconText(systemImage: "bubble.left.and.bubble.right", text: "\(posts) 楼")
+                IconText(systemImage: "eye", text: Formatters.compactCount(views))
             }
             .font(.caption)
             .foregroundStyle(.secondary)
