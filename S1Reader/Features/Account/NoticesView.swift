@@ -76,8 +76,10 @@ struct NoticesView: View {
             }
 
             if vm.isLoading {
-                HStack { Spacer(); ProgressView(); Spacer() }
-                    .listRowSeparator(.hidden)
+                ForEach(0..<6, id: \.self) { _ in
+                    SkeletonNoticeRow()
+                }
+                .listRowSeparator(.hidden)
             } else if vm.notices.isEmpty && vm.errorMessage == nil {
                 Section {
                     ContentUnavailableView("没有新提醒", systemImage: "bell")
@@ -134,5 +136,18 @@ private struct NoticeRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+private struct SkeletonNoticeRow: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            SkeletonBar(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 7) {
+                SkeletonBar(width: 180, height: 13)
+                SkeletonBar(height: 11)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityHidden(true)
     }
 }

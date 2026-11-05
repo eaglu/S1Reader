@@ -104,7 +104,9 @@ struct FavoritesView: View {
             }
 
             if vm.isLoading {
-                HStack { Spacer(); ProgressView(); Spacer() }
+                ForEach(0..<6, id: \.self) { _ in
+                    SkeletonFavoriteRow()
+                }
             } else if vm.items.isEmpty && vm.errorMessage == nil {
                 ContentUnavailableView("收藏夹是空的", systemImage: "bookmark")
             }
@@ -116,5 +118,15 @@ struct FavoritesView: View {
         .task {
             if vm.items.isEmpty { await vm.load(reset: true) }
         }
+    }
+}
+private struct SkeletonFavoriteRow: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            SkeletonBar(height: 14)
+            SkeletonBar(width: 150, height: 11)
+        }
+        .padding(.vertical, 4)
+        .accessibilityHidden(true)
     }
 }

@@ -216,6 +216,9 @@ final class ThreadDetailViewModel {
 
     func isFresh(_ pid: String) -> Bool { freshPids.contains(pid) }
 
+    /// Dismisses a non-blocking error notice without refetching.
+    func clearError() { errorMessage = nil }
+
     private func markFresh(_ pids: [String]) {
         guard !pids.isEmpty else { return }
         freshPids = Set(pids)
@@ -312,7 +315,6 @@ struct ThreadDetailView: View {
     @State private var showPageJump = false
     @State private var onlyOriginalPoster = false
     @State private var isFavorite = false
-    @State private var favoriteError: String?
     @State private var visiblePid: String?
     @State private var didRestorePosition = false
     @State private var isRestoringPosition = false
@@ -329,7 +331,7 @@ struct ThreadDetailView: View {
     @State private var returnPid: String?
     @State private var highlightedPid: String?
     @State private var highlightTask: Task<Void, Never>?
-    @State private var quoteNotice: String?
+    @State private var toast: ToastMessage?
     @Namespace private var imageZoom
     /// Overscroll is ignored briefly after a jump, so the programmatic scroll
     /// cannot be mistaken for the reader pulling the list.
@@ -354,7 +356,6 @@ struct ThreadDetailView: View {
         return 1
     }
     @State private var threadImageCount = 0
-    @State private var cacheNotice: String?
 
     init(summary: ThreadSummary) {
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
@@ -451,6 +452,16 @@ struct ThreadDetailView: View {
                let target = URL(string: raw) {
                 try? await Task.sleep(for: .milliseconds(1200))
                 openImage(target)
+            }
+            // S1_TOAST=<text> shows the toast so its look and timing can be filmed.
+            if let text = ProcessInfo.processInfo.environment["S1_TOAST"], !text.isEmpty {
+                try? await Task.sleep(for: .milliseconds(400))
+                let hold = ProcessInfo.processInfo.environment["S1_TOAST_HOLD"].flatMap(Int.init) ?? 2200
+                toast = ToastMessage(text: text, style: .success, duration: .milliseconds(hold))
+            }
+            // S1_INLINE_NOTICE=<text> forces the inline retry notice.
+            if let text = ProcessInfo.processInfo.environment["S1_INLINE_NOTICE"], !text.isEmpty {
+                model.errorMessage = text
             }
             // S1_QUOTE_TAP=<pid> follows a quote (the button turns into "back");
             // S1_QUOTE_BACK=1 then takes it, so both states can be filmed.
@@ -556,17 +567,7 @@ struct ThreadDetailView: View {
         }
         .sensoryFeedback(.impact(weight: .light), trigger: isFavorite)
         .sensoryFeedback(.selection, trigger: onlyOriginalPoster)
-        .alert(cacheNotice ?? "", isPresented: isShowingCacheNotice) {
-            Button("好", role: .cancel) { cacheNotice = nil }
-        }
-        .alert(quoteNotice ?? "", isPresented: isShowingQuoteNotice) {
-            Button("好", role: .cancel) { quoteNotice = nil }
-        }
-        .alert("收藏失败", isPresented: isShowingFavoriteError) {
-            Button("好", role: .cancel) { favoriteError = nil }
-        } message: {
-            Text(favoriteError ?? "")
-        }
+        .toast($toast)
         .sheet(isPresented: $showPageJump) { pageJumpSheet }
         .sheet(isPresented: $showComposer) { composerSheet }
         .sheet(isPresented: $showLogin) { LoginView() }
@@ -589,18 +590,6 @@ struct ThreadDetailView: View {
             await model.loadPage(model.pageCount)
             model.focusPid = pid
         }
-    }
-
-    private var isShowingCacheNotice: Binding<Bool> {
-        Binding(get: { cacheNotice != nil }, set: { if !$0 { cacheNotice = nil } })
-    }
-
-    private var isShowingQuoteNotice: Binding<Bool> {
-        Binding(get: { quoteNotice != nil }, set: { if !$0 { quoteNotice = nil } })
-    }
-
-    private var isShowingFavoriteError: Binding<Bool> {
-        Binding(get: { favoriteError != nil }, set: { if !$0 { favoriteError = nil } })
     }
 
     private var isShowingViewer: Binding<Bool> {
@@ -762,6 +751,15 @@ extension ThreadDetailView {
                     total: model.totalPosts
                 )
 
+                if let error = model.errorMessage, !model.posts.isEmpty {
+                    InlineNotice(
+                        message: error,
+                        onRetry: { Task { await model.reload() } },
+                        onDismiss: { model.clearError() }
+                    )
+                    .noticeTransition(reduceMotion: reduceMotion)
+                }
+
                 NewRepliesHint(
                     isChecking: model.isCheckingNewReplies,
                     message: model.lastCheckMessage,
@@ -770,6 +768,7 @@ extension ThreadDetailView {
             }
             .modifier(ReadableWidth())
             .scrollTargetLayout()
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: model.errorMessage)
             .opacity(isCrossfading ? 0 : 1)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isCrossfading)
         }
@@ -837,7 +836,7 @@ extension ThreadDetailView {
                 containingPost: pid,
                 tid: model.summary.tid
             ) else {
-                quoteNotice = "找不到被引用的楼层，可能已经被删除。"
+                toast = ToastMessage(text: "找不到被引用的楼层，可能已经被删除。", style: .warning)
                 return
             }
             if !reduceMotion, page != model.loadedPages {
@@ -848,7 +847,7 @@ extension ThreadDetailView {
                 await model.loadPage(page)
                 guard model.posts.contains(where: { $0.pid == pid }) else {
                     withAnimation(.easeInOut(duration: 0.2)) { isCrossfading = false }
-                    quoteNotice = "被引用的楼层不在这 40 楼里，可能已经被删除。"
+                    toast = ToastMessage(text: "被引用的楼层不在这 40 楼里，可能已经被删除。", style: .warning)
                     return
                 }
                 if let origin, origin != pid { returnPid = origin }
@@ -862,7 +861,7 @@ extension ThreadDetailView {
             }
             await model.loadPage(page)
             guard model.posts.contains(where: { $0.pid == pid }) else {
-                quoteNotice = "被引用的楼层不在这 40 楼里，可能已经被删除。"
+                toast = ToastMessage(text: "被引用的楼层不在这 40 楼里，可能已经被删除。", style: .warning)
                 return
             }
         }
@@ -989,7 +988,10 @@ extension ThreadDetailView {
         Task {
             await ImageCacheIndex.shared.remove(tid: tid)
             threadImageCount = 0
-            cacheNotice = removed > 0 ? "已清除本帖的 \(removed) 张图片缓存" : "本帖没有图片缓存"
+            toast = ToastMessage(
+                text: removed > 0 ? "已清除本帖的 \(removed) 张图片缓存" : "本帖没有图片缓存",
+                style: .success
+            )
         }
     }
 
@@ -1024,8 +1026,9 @@ extension ThreadDetailView {
             do {
                 try await APIClient.shared.setFavorite(tid: model.summary.tid, favorite: target)
                 isFavorite = target
+                toast = ToastMessage(text: target ? "已收藏" : "已取消收藏", style: .success)
             } catch {
-                favoriteError = error.localizedDescription
+                toast = ToastMessage(text: error.localizedDescription, style: .warning)
             }
         }
     }
