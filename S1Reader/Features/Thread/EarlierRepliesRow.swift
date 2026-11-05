@@ -8,6 +8,8 @@ struct EarlierRepliesRow: View {
     let page: Int
     let action: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         HStack(spacing: 8) {
             if isLoading {
@@ -21,6 +23,8 @@ struct EarlierRepliesRow: View {
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
+        .contentTransition(reduceMotion ? .identity : .opacity)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isLoading)
         .contentShape(Rectangle())
         .onTapGesture(perform: action)
         .accessibilityElement(children: .combine)

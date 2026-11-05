@@ -316,6 +316,9 @@ struct ThreadDetailView: View {
     @State private var visiblePid: String?
     @State private var didRestorePosition = false
     @State private var isRestoringPosition = false
+    /// True while a jump swaps in another page: the list fades out, is replaced,
+    /// and fades back in at the target floor instead of cutting.
+    @State private var isCrossfading = false
     @State private var saveTask: Task<Void, Never>?
     /// Where the list stood when the last page was fetched, so a page is only
     /// pulled once per approach instead of as fast as the screen can fill.
@@ -339,6 +342,17 @@ struct ThreadDetailView: View {
     }
 
     private var topAnchorKey: String { visiblePid ?? Marker.empty }
+
+    /// DEBUG hook: `S1_MOTION_SLOW=<factor>` stretches transitions so they can be
+    /// filmed on a simulator (normal playback is 1).
+    private var motionScale: Double {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["S1_MOTION_SLOW"], let factor = Double(raw) {
+            return max(1, factor)
+        }
+        #endif
+        return 1
+    }
     @State private var threadImageCount = 0
     @State private var cacheNotice: String?
 
@@ -756,6 +770,8 @@ extension ThreadDetailView {
             }
             .modifier(ReadableWidth())
             .scrollTargetLayout()
+            .opacity(isCrossfading ? 0 : 1)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isCrossfading)
         }
         .scrollPosition(id: $visiblePid, anchor: .top)
         .modifier(LoadEarlierOnOverscroll(isEnabled: model.hasEarlier) {
@@ -824,6 +840,26 @@ extension ThreadDetailView {
                 quoteNotice = "找不到被引用的楼层，可能已经被删除。"
                 return
             }
+            if !reduceMotion, page != model.loadedPages {
+                // Another page is a replacement, not a scroll: cross-fade it in
+                // so the swap does not feel like a cut.
+                withAnimation(.easeInOut(duration: 0.16 * motionScale)) { isCrossfading = true }
+                try? await Task.sleep(for: .milliseconds(Int(170 * motionScale)))
+                await model.loadPage(page)
+                guard model.posts.contains(where: { $0.pid == pid }) else {
+                    withAnimation(.easeInOut(duration: 0.2)) { isCrossfading = false }
+                    quoteNotice = "被引用的楼层不在这 40 楼里，可能已经被删除。"
+                    return
+                }
+                if let origin, origin != pid { returnPid = origin }
+                didRestorePosition = true
+                ignoreOverscrollUntil = Date().addingTimeInterval(1.2)
+                visiblePid = pid
+                highlight(pid)
+                try? await Task.sleep(for: .milliseconds(Int(60 * motionScale)))
+                withAnimation(.easeInOut(duration: 0.22 * motionScale)) { isCrossfading = false }
+                return
+            }
             await model.loadPage(page)
             guard model.posts.contains(where: { $0.pid == pid }) else {
                 quoteNotice = "被引用的楼层不在这 40 楼里，可能已经被删除。"
@@ -857,6 +893,11 @@ extension ThreadDetailView {
         } else {
             withAnimation(.easeInOut(duration: 0.3)) { visiblePid = pid }
         }
+        highlight(pid)
+    }
+
+    /// Marks a floor briefly so the eye can find it after the list moves.
+    private func highlight(_ pid: String) {
         highlightedPid = pid
         highlightTask?.cancel()
         highlightTask = Task {
