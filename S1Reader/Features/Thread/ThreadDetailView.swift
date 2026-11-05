@@ -281,6 +281,8 @@ struct ThreadDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: ThreadDetailViewModel
     @State private var viewerIndex: Int?
+    /// Which picture the reader tapped, so the viewer can grow out of it.
+    @State private var zoomSourceID: String?
     @State private var threadImageURLs: [URL] = []
     @State private var showComposer = false
     @State private var showLogin = false
@@ -302,6 +304,7 @@ struct ThreadDetailView: View {
     @State private var highlightedPid: String?
     @State private var highlightTask: Task<Void, Never>?
     @State private var quoteNotice: String?
+    @Namespace private var imageZoom
     /// Overscroll is ignored briefly after a jump, so the programmatic scroll
     /// cannot be mistaken for the reader pulling the list.
     @State private var ignoreOverscrollUntil = Date.distantPast
@@ -459,6 +462,8 @@ struct ThreadDetailView: View {
                     toggleFavorite()
                 } label: {
                     Image(systemName: isFavorite ? "bookmark.fill" : "bookmark")
+                        .symbolEffect(.bounce, value: isFavorite)
+                        .symbolEffectsRemoved(reduceMotion)
                 }
                 .accessibilityLabel(isFavorite ? "取消收藏" : "收藏主题")
             }
@@ -523,6 +528,7 @@ struct ThreadDetailView: View {
         .sheet(isPresented: $showLogin) { LoginView() }
         .fullScreenCover(isPresented: isShowingViewer) {
             ImageBrowser(urls: threadImageURLs, index: viewerIndexBinding)
+                .zoomPresentation(id: zoomSourceID, in: imageZoom)
         }
     }
 
@@ -749,7 +755,8 @@ extension ThreadDetailView {
         PostRowView(
             post: post,
             onImageTap: openImage,
-            onQuoteTap: { pid in Task { await jump(to: pid, from: post.pid) } }
+            onQuoteTap: { pid in Task { await jump(to: pid, from: post.pid) } },
+            zoomNamespace: imageZoom
         )
         .id(post.pid)
         .background(post.pid == highlightedPid ? Color.accentColor.opacity(0.12) : Color.clear)
@@ -878,6 +885,7 @@ extension ThreadDetailView {
     /// Opens the viewer on the tapped picture, keeping the thread's order so the
     /// reader can swipe through the rest.
     private func openImage(_ url: URL) {
+        zoomSourceID = url.absoluteString
         if let index = threadImageURLs.firstIndex(of: url) {
             viewerIndex = index
         } else {

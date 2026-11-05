@@ -183,19 +183,20 @@ struct ThreadListView: View {
 
 private struct SkeletonThreadRow: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("这是一个用来占位的主题标题，长度大约两行")
-                .font(.callout.weight(.medium))
-            Text("作者 · 回复 · 浏览")
-                .font(.caption)
+        VStack(alignment: .leading, spacing: 7) {
+            SkeletonBar(height: 14)
+            SkeletonBar(width: 190, height: 10)
         }
-        .redacted(reason: .placeholder)
         .padding(.vertical, 4)
+        .accessibilityHidden(true)
     }
 }
 
 private struct ThreadRow: View {
     let thread: ThreadSummary
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var badgeShown = false
 
     private var newReplies: Int {
         ThreadVisitStore.shared.newReplies(for: thread.tid, replies: thread.replies)
@@ -233,6 +234,17 @@ private struct ThreadRow: View {
                         .padding(.vertical, 1)
                         .background(Color.accentColor.opacity(0.15), in: Capsule())
                         .foregroundStyle(Color.accentColor)
+                        .scaleEffect(badgeShown ? 1 : 0.6)
+                        .opacity(badgeShown ? 1 : 0)
+                        .onAppear {
+                            guard !reduceMotion else {
+                                badgeShown = true
+                                return
+                            }
+                            withAnimation(.spring(response: 0.34, dampingFraction: 0.7)) {
+                                badgeShown = true
+                            }
+                        }
                         .accessibilityLabel("上次浏览后新增 \(newReplies) 条回复")
                 }
                 IconText(systemImage: "eye", text: Formatters.compactCount(thread.views))

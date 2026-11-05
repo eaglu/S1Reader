@@ -129,16 +129,13 @@ private struct ForumRow: View {
 /// Placeholder rows so the first load looks like content instead of a spinner.
 private struct SkeletonBoardRow: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("版块名称")
-                .font(.headline)
-            Text("这里是一段版块简介，用来占位。")
-                .font(.subheadline)
-            Text("主题 1.2 万 · 帖数 3.4 万")
-                .font(.caption)
+        VStack(alignment: .leading, spacing: 7) {
+            SkeletonBar(width: 96, height: 16)
+            SkeletonBar(width: 232, height: 12)
+            SkeletonBar(width: 148, height: 10)
         }
-        .redacted(reason: .placeholder)
         .padding(.vertical, 4)
+        .accessibilityHidden(true)
     }
 }
 

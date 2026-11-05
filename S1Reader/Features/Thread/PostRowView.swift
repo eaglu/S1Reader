@@ -5,6 +5,9 @@ struct PostRowView: View {
     let post: Post
     var onImageTap: (URL) -> Void = { _ in }
     var onQuoteTap: (String) -> Void = { _ in }
+    /// Shared with the full-screen viewer so a tapped picture can grow out of
+    /// its thumbnail (iOS 18 and later).
+    var zoomNamespace: Namespace.ID?
 
     @State private var nodes: [PostNode] = []
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -16,7 +19,12 @@ struct PostRowView: View {
                 Text(" ")
                     .redacted(reason: .placeholder)
             } else {
-                PostContentView(nodes: nodes, onImageTap: onImageTap, onQuoteTap: onQuoteTap)
+                PostContentView(
+                    nodes: nodes,
+                    onImageTap: onImageTap,
+                    onQuoteTap: onQuoteTap,
+                    zoomNamespace: zoomNamespace
+                )
                     .contextMenu { menu }
             }
         }
@@ -92,6 +100,7 @@ struct PostContentView: View {
     let nodes: [PostNode]
     var onImageTap: (URL) -> Void = { _ in }
     var onQuoteTap: (String) -> Void = { _ in }
+    var zoomNamespace: Namespace.ID?
 
     @State private var smileys: [URL: UIImage] = [:]
     @State private var saveMessage: String?
@@ -168,6 +177,7 @@ struct PostContentView: View {
                             .frame(maxWidth: .infinity, maxHeight: 460)
                     }
                     .buttonStyle(.plain)
+                    .zoomSource(id: url.absoluteString, in: zoomNamespace)
                     .accessibilityLabel("帖子图片")
                     .accessibilityHint("双击查看大图")
                     .contextMenu {

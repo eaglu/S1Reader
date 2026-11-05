@@ -121,6 +121,7 @@ struct RemoteImage: View {
     @State private var image: UIImage?
     @State private var didFail = false
     @State private var isOnScreen = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -140,6 +141,10 @@ struct RemoteImage: View {
                     .overlay(ProgressView())
             }
         }
+        // Pictures arrive at different moments; a short fade keeps them from
+        // popping in mid-scroll.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: image == nil)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: didFail)
         .visibleInScroll { visible in
             isOnScreen = visible
             if visible { load() }

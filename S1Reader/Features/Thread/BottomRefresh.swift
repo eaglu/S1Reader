@@ -37,6 +37,8 @@ struct NewRepliesHint: View {
     let message: String?
     let hasPosts: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         if hasPosts {
             HStack(spacing: 6) {
@@ -56,6 +58,11 @@ struct NewRepliesHint: View {
             .foregroundStyle(.tertiary)
             .frame(maxWidth: .infinity)
             .padding(.bottom, 24)
+            // The result replaces the hint in place; a short cross-fade keeps
+            // the line from flickering while the request is in flight.
+            .contentTransition(reduceMotion ? .identity : .opacity)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: isChecking)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: message)
             .accessibilityElement(children: .combine)
         }
     }

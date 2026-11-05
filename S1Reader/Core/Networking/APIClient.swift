@@ -124,6 +124,12 @@ actor APIClient {
         _ params: [String: String] = [:],
         guest: Bool = false
     ) async throws -> T {
+        #if DEBUG
+        // S1_SLOW=<ms> stretches every request so loading states can be filmed.
+        if let raw = ProcessInfo.processInfo.environment["S1_SLOW"], let ms = Int(raw), ms > 0 {
+            try? await Task.sleep(for: .milliseconds(ms))
+        }
+        #endif
         let data = try await rawFetch(module, params, guest: guest)
 
         do {

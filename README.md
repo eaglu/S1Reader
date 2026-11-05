@@ -95,6 +95,7 @@ https://stage1st.com/2b/api/mobile/index.php?version=4&module=<module>&mobile=2
 - iPad：标签栏在 iPad 上自动变为侧边栏（iOS 18+），长文阅读区最宽 760pt 居中；主题列表在 iPad 上用分组样式
 - 引用回复可点：跳到被引用的楼层并短暂高亮；跳转后右下角按钮换成「返回刚才的楼」（图标从 ↩ 变成 ⇤），再点精确回到点击引用的那一楼（跨页也行，服务端 `findpost` 会给出所在页码）
 - 滑到最新一页的底部继续上滑：检查有没有新回复，直接接在列表末尾
+- 动效（遵循 HIG「motion」与「feedback」）：骨架屏用自绘占位条 + 条内高光缓扫（1.6s 一轮）；图片下载完成后 0.18s 淡入；收藏按钮用符号弹动（`symbolEffect(.bounce)`）；列表里的 +N 徽标用弹簧缩放出现；点开帖子图片用 iOS 18+ 的 zoom 转场（`matchedTransitionSource` + `navigationTransition(.zoom)`）；开启「减弱动态效果」时上述动画全部退化为静态或纯透明度变化
 - App 图标为脚本生成的占位图
 
 ## 开发小工具
@@ -124,6 +125,7 @@ SIMCTL_CHILD_S1_TAB=account SIMCTL_CHILD_S1_OPEN=login ...
 - `S1_LOAD_EARLIER_GATED=<n>` 用滚动触发的那条路径连点 n 次，用来验证同一段滚动只会补一页
 - `S1_TOP_ROW=1` 配合 `S1_JUMP_PAGE` 把列表停在第 2 楼，让第一楼上方的那一行露出来
 - `S1_QUOTE_TAP=<pid>` 打开主题后点一次引用（按钮会切成「返回原处」），用来检查跨页跳楼；配合 `S1_QUOTE_BACK=1` 会再点一次返回，`S1_QUOTE_FROM=<pid>` 指定「从哪一楼点的」以便检查返回落点
+- `S1_SLOW=<毫秒>` 让每个 API 请求先等待该时长，用来把加载态拉长以便连拍检查骨架屏与过渡动画
 - `S1_CHECK_NEW=1` 打开主题后直接检查最新回复，用来检查底部上滑刷新（模拟器做不出下拉手势）
 - `S1_DEMO=1` 注入假账号（S1er / 管理员）、假提醒与假收藏，用于在没有真实账号时检查登录后的界面：
 
