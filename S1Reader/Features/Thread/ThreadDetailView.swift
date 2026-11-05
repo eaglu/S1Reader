@@ -199,6 +199,7 @@ struct ThreadDetailView: View {
     @State private var favoriteError: String?
     @State private var visiblePid: String?
     @State private var didRestorePosition = false
+    @State private var isRestoringPosition = false
     @State private var saveTask: Task<Void, Never>?
     @State private var threadImageCount = 0
     @State private var cacheNotice: String?
@@ -269,6 +270,12 @@ struct ThreadDetailView: View {
             .scrollTargetLayout()
         }
         .scrollPosition(id: $visiblePid, anchor: .top)
+        .opacity(isRestoringPosition ? 0 : 1)
+        .overlay {
+            if isRestoringPosition {
+                ProgressView()
+            }
+        }
         .contentMargins(.bottom, 72, for: .scrollContent)
         .onChange(of: model.focusPid) { _, pid in
             guard let pid else { return }
@@ -289,12 +296,20 @@ struct ThreadDetailView: View {
         }
         .task {
             await model.loadIfNeeded()
+            // Hiding the list until the restored post is scrolled into place keeps
+            // the reader from seeing the top of the thread flash by first.
+            let hasSavedPosition = ReadingProgressStore.shared.position(for: model.summary.tid) != nil
+            if hasSavedPosition { isRestoringPosition = true }
             await model.restoreReadingPosition()
             didRestorePosition = true
             if let pid = model.resumePid {
                 model.resumePid = nil
                 try? await Task.sleep(for: .milliseconds(250))
                 visiblePid = pid
+            }
+            if hasSavedPosition {
+                try? await Task.sleep(for: .milliseconds(120))
+                isRestoringPosition = false
             }
             #if DEBUG
             // S1_SCROLL=<pid> jumps to a post so scrolling/saving can be checked
@@ -305,6 +320,11 @@ struct ThreadDetailView: View {
                     try? await Task.sleep(for: .milliseconds(500))
                     await model.loadMore()
                 }
+            }
+            // S1_JUMP_SHEET=1 opens the page picker so its input field can be checked.
+            if ProcessInfo.processInfo.environment["S1_JUMP_SHEET"] == "1" {
+                try? await Task.sleep(for: .milliseconds(1200))
+                showPageJump = true
             }
             if let pid = ProcessInfo.processInfo.environment["S1_SCROLL"], !pid.isEmpty {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -517,21 +537,37 @@ private struct PageJumpSheet: View {
     var onJump: (Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var page: Int
+    @State private var text: String
+    @FocusState private var isEditing: Bool
 
     init(current: Int, total: Int, onJump: @escaping (Int) -> Void) {
         self.current = current
         self.total = total
         self.onJump = onJump
-        _page = State(initialValue: current)
+        _text = State(initialValue: String(current))
+    }
+
+    private var lastPage: Int { max(total, 1) }
+
+    /// Page number typed by the reader, or nil when it is out of range.
+    private var enteredPage: Int? {
+        guard let value = Int(text), value >= 1, value <= lastPage else { return nil }
+        return value
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Stepper(value: $page, in: 1...max(total, 1)) {
-                        Text("第 \(page) 页")
+                    HStack {
+                        Text("页码")
+                        Spacer()
+                        TextField("1–\(lastPage)", text: $text)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .monospacedDigit()
+                            .focused($isEditing)
+                            .frame(maxWidth: 120)
                     }
                     HStack {
                         Text("共")
@@ -539,13 +575,16 @@ private struct PageJumpSheet: View {
                         Text("\(total) 页")
                             .foregroundStyle(.secondary)
                     }
+                } footer: {
+                    Text("输入 1 到 \(lastPage) 之间的页码")
                 }
                 Section {
-                    Button("跳转") {
+                    Button(enteredPage.map { "跳到第 \($0) 页" } ?? "跳转") {
+                        guard let page = enteredPage else { return }
                         onJump(page)
                         dismiss()
                     }
-                    .disabled(page == current)
+                    .disabled(enteredPage == nil || enteredPage == current)
                 }
             }
             .navigationTitle("跳页")
@@ -554,9 +593,23 @@ private struct PageJumpSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("收起键盘") { isEditing = false }
+                }
+            }
+            .onChange(of: text) { _, value in
+                let digits = value.filter(\.isNumber)
+                let trimmed = String(digits.prefix(5))
+                if trimmed != value { text = trimmed }
             }
         }
-        .presentationDetents([.height(280)])
+        .presentationDetents([.height(300)])
+        .task {
+            // Give the sheet time to slide in before taking focus.
+            try? await Task.sleep(for: .milliseconds(350))
+            isEditing = true
+        }
     }
 }
 

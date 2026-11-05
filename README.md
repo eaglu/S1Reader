@@ -105,6 +105,7 @@ SIMCTL_CHILD_S1_TAB=account SIMCTL_CHILD_S1_OPEN=login ...
 - `S1_CLEAR_IMAGES=1` 打开主题后清掉本帖图片缓存，并打印磁盘缓存占用变化，用来检查按主题清理
 - `S1_SAVE_IMAGE=<url>` 启动时保存一张图片到相册，用来检查相册写入（模拟器无法点击菜单）
 - `S1_VIEW_IMAGE=<url>` 打开主题后直接弹出图片查看器，用来检查全屏显示与缩放
+- `S1_JUMP_SHEET=1` 打开主题后自动弹出「跳页」面板，用来检查页码输入框
 - `S1_SEEN=<tid>:<replies>[,<tid>:<replies>]` 假装这些主题在只有 N 条回复时读过，用来检查列表里的 +N 徽标
 - 启动日志里的 `S1 device corner radius …` 打印当前设备的屏幕圆角半径，图片圆角 = 该值 − 16pt
 - `S1_LOADMORE=<n>` 打开主题后连续追加 n 页，用来检查分页与页码显示
