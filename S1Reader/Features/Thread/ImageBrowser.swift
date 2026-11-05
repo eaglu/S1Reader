@@ -93,42 +93,114 @@ struct ImageBrowser: View {
     }
 }
 
-/// A single picture that fits the screen and can be pinched or double-tapped.
+/// A single picture that fits the screen and can be pinched, dragged or
+/// double-tapped. The zoom is anchored at the tapped point and the picture is
+/// clipped to the viewport, so zooming in never strands you in a corner.
 private struct ZoomableImage: View {
     let url: URL
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var scale: CGFloat = 1
+    @State private var zoom: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @GestureState private var pinch: CGFloat = 1
+    @GestureState private var pan: CGSize = .zero
+
+    private static let maxZoom: CGFloat = 4
+    private static let doubleTapZoom: CGFloat = 2.5
 
     var body: some View {
         GeometryReader { proxy in
-            ScrollView([.horizontal, .vertical]) {
-                // Fitting the picture into the viewport height as well as its
-                // width is what shows the whole image instead of its top
-                // slice; the trailing frame reserves scroll space when zoomed.
-                RemoteImage(url: url, contentMode: .fit, startsLoadingImmediately: true)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .scaleEffect(scale)
-                    .frame(width: proxy.size.width * scale, height: proxy.size.height * scale)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .contentShape(Rectangle())
-            .gesture(
-                MagnifyGesture()
-                    .onChanged { value in
-                        scale = min(max(1, value.magnification), 4)
-                    }
-                    .onEnded { value in
-                        withAnimation(reduceMotion ? nil : .snappy) {
-                            scale = min(max(1, value.magnification), 4)
-                        }
-                    }
-            )
-            .onTapGesture(count: 2) {
-                withAnimation(reduceMotion ? nil : .snappy) { scale = scale > 1 ? 1 : 2.5 }
-            }
-            .accessibilityLabel("图片")
+            let size = proxy.size
+            RemoteImage(url: url, contentMode: .fit, startsLoadingImmediately: true)
+                .frame(width: size.width, height: size.height)
+                .scaleEffect(currentZoom)
+                .offset(visibleOffset(in: size))
+                .frame(width: size.width, height: size.height)
+                .contentShape(Rectangle())
+                .gesture(panGesture(in: size))
+                .simultaneousGesture(pinchGesture(in: size))
+                .onTapGesture(count: 2, coordinateSpace: .local) { location in
+                    doubleTap(at: location, in: size)
+                }
+                .onChange(of: url) {
+                    zoom = 1
+                    offset = .zero
+                }
+                .onAppear(perform: applyDebugZoom)
+                .accessibilityLabel("图片")
         }
         .background(Color.black)
+    }
+
+    private var currentZoom: CGFloat {
+        min(max(1, zoom * pinch), Self.maxZoom)
+    }
+
+    /// How far the picture can travel before its edge leaves the viewport.
+    private func limit(in size: CGSize, zoom: CGFloat) -> CGSize {
+        CGSize(width: max(0, size.width * (zoom - 1) / 2),
+               height: max(0, size.height * (zoom - 1) / 2))
+    }
+
+    private func clamped(_ value: CGSize, in size: CGSize, zoom: CGFloat) -> CGSize {
+        let limit = limit(in: size, zoom: zoom)
+        return CGSize(width: min(max(value.width, -limit.width), limit.width),
+                      height: min(max(value.height, -limit.height), limit.height))
+    }
+
+    private func visibleOffset(in size: CGSize) -> CGSize {
+        clamped(CGSize(width: offset.width + pan.width, height: offset.height + pan.height),
+                in: size,
+                zoom: currentZoom)
+    }
+
+    private func panGesture(in size: CGSize) -> some Gesture {
+        DragGesture()
+            .updating($pan) { value, state, _ in
+                guard currentZoom > 1 else { return }
+                state = value.translation
+            }
+            .onEnded { value in
+                guard currentZoom > 1 else { return }
+                let moved = CGSize(width: offset.width + value.translation.width,
+                                   height: offset.height + value.translation.height)
+                offset = clamped(moved, in: size, zoom: currentZoom)
+            }
+    }
+
+    private func pinchGesture(in size: CGSize) -> some Gesture {
+        MagnifyGesture()
+            .updating($pinch) { value, state, _ in
+                state = value.magnification
+            }
+            .onEnded { value in
+                let target = min(max(1, zoom * value.magnification), Self.maxZoom)
+                withAnimation(reduceMotion ? nil : .snappy) {
+                    zoom = target
+                    offset = target == 1 ? .zero : clamped(offset, in: size, zoom: target)
+                }
+            }
+    }
+
+    /// Scaling happens about the centre, so keeping the tapped point under the
+    /// finger means shifting the whole view by `(point - centre) * (1 - zoom)`.
+    private func doubleTap(at location: CGPoint, in size: CGSize) {
+        let target = zoom > 1 ? 1 : Self.doubleTapZoom
+        let shift = CGSize(width: (location.x - size.width / 2) * (1 - target),
+                           height: (location.y - size.height / 2) * (1 - target))
+        withAnimation(reduceMotion ? nil : .snappy) {
+            zoom = target
+            offset = target == 1 ? .zero : clamped(shift, in: size, zoom: target)
+        }
+    }
+
+    /// `S1_ZOOM=<scale>` opens the viewer already zoomed, so the anchored
+    /// framing can be checked from a screenshot (the simulator cannot tap).
+    private func applyDebugZoom() {
+        #if DEBUG
+        guard let raw = ProcessInfo.processInfo.environment["S1_ZOOM"],
+              let value = Double(raw), value > 1 else { return }
+        zoom = min(max(1, value), Self.maxZoom)
+        #endif
     }
 }

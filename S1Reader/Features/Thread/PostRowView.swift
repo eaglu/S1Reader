@@ -196,8 +196,13 @@ struct PostContentView: View {
                 return nil
             }
             for url in urls where smileys[url] == nil {
-                if let image = await ImageLoader.shared.image(for: url) {
-                    smileys[url] = Self.resized(image, height: 20)
+                // Bundled set first, so the common smileys never hit the network.
+                if let local = Self.smiley(for: url) {
+                    smileys[url] = local
+                } else if let image = await ImageLoader.shared.image(for: url) {
+                    let resized = Self.resized(image, height: Self.smileyHeight)
+                    Self.resizedCache.setObject(resized, forKey: url as NSURL)
+                    smileys[url] = resized
                 }
             }
         }
@@ -215,6 +220,18 @@ struct PostContentView: View {
                 saveMessage = error.localizedDescription
             }
         }
+    }
+
+    private static let smileyHeight: CGFloat = 20
+    private static let resizedCache = NSCache<NSURL, UIImage>()
+
+    /// Bundled smiley, resized once per URL and kept so scrolling back is free.
+    private static func smiley(for url: URL) -> UIImage? {
+        if let cached = resizedCache.object(forKey: url as NSURL) { return cached }
+        guard let bundled = Smileys.bundled(url) else { return nil }
+        let resized = Self.resized(bundled, height: smileyHeight)
+        resizedCache.setObject(resized, forKey: url as NSURL)
+        return resized
     }
 
     private static func resized(_ image: UIImage, height: CGFloat) -> UIImage {
