@@ -584,7 +584,7 @@ private struct ImageViewer: View {
                         .frame(width: proxy.size.width * scale, height: proxy.size.height * scale)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
-                .clipShape(DeviceCornerShape())
+                .clipShape(ContainerRelativeShape())
                 .contentShape(Rectangle())
                 .gesture(
                     MagnifyGesture()

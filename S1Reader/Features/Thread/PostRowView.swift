@@ -64,6 +64,7 @@ struct PostContentView: View {
 
     @State private var smileys: [URL: UIImage] = [:]
     @State private var saveMessage: String?
+    @State private var needsPhotoPermission = false
 
     private enum Block {
         case text(Text)
@@ -135,7 +136,7 @@ struct PostContentView: View {
                     } label: {
                         RemoteImage(url: url, contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: 460)
-                            .clipShape(DeviceCornerShape())
+                            .clipShape(DeviceCornerShape(inset: 16))
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
@@ -171,8 +172,10 @@ struct PostContentView: View {
         Task {
             do {
                 try await ImageSaver.save(url)
+                needsPhotoPermission = false
                 saveMessage = "已保存到相册"
             } catch {
+                needsPhotoPermission = (error as? ImageSaveError) == .denied
                 saveMessage = error.localizedDescription
             }
         }
