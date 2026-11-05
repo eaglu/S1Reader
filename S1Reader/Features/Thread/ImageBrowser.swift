@@ -17,7 +17,12 @@ struct ImageBrowser: View {
     }
 
     var body: some View {
-        NavigationStack {
+        ZStack {
+            // Painted from the first frame so the sheet never flashes the system
+            // background while it animates in or while pages swipe.
+            Color.black.ignoresSafeArea()
+
+            NavigationStack {
             TabView(selection: $index) {
                 ForEach(Array(urls.enumerated()), id: \.offset) { offset, url in
                     ZoomableImage(url: url)
@@ -51,8 +56,12 @@ struct ImageBrowser: View {
             }
             .toolbarBackground(.black, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            }
         }
-        .preferredColorScheme(.dark)
+        .presentationBackground(Color.black)
+        // Scoped to this subtree instead of preferredColorScheme, which would
+        // flip the whole window to dark and make the thread behind flash.
+        .environment(\.colorScheme, .dark)
         .sensoryFeedback(.success, trigger: savedCount)
         .alert(message ?? "", isPresented: Binding(
             get: { message != nil },
