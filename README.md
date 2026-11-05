@@ -108,6 +108,14 @@ https://stage1st.com/2b/api/mobile/index.php?version=4&module=<module>&mobile=2
 
 调试：`S1_PERF=1` 打印每轮翻页实际解析了多少帖子、总耗时与均值；`S1_PERF_BENCH=1` 额外对比「只扫标签」与「完整解析」的耗时。
 
+### 图片
+
+帖子里的图片仍然是滚到屏幕上才加载（`visibleInScroll` 判定，离屏的只留占位）。占位块按图片真实宽高比撑开，所以图片落地时行高不会变、下面的内容不会跳：
+
+- 宽高比优先从 `ImageAspectStore`（UserDefaults 键 `s1.imageAspects`，上限 800 条）读，之前看过的图立刻就有正确尺寸；
+- 没见过的图先发一个 `Range: bytes=0-65535` 的小请求，用 ImageIO 增量解码读出像素宽高（实测 206 / 64KB 就能拿到 1049×862），拿到后占位块按真实比例调整一次；
+- 图片本体下载完成后，比例会再校验并写入缓存。
+
 ## 开发小工具
 
 Debug 构建支持环境变量直达页面，方便截图和调试（模拟器无法点击 UI 时尤其有用）：
@@ -139,6 +147,7 @@ SIMCTL_CHILD_S1_TAB=account SIMCTL_CHILD_S1_OPEN=login ...
 - `S1_FRESH_SCROLL=1` 配合 `S1_LOADMORE` 在追加后滚到首批新楼层，用来拍入场动画
 - `S1_TOAST=<文字>` 打开主题后弹一条 toast（配合 `S1_TOAST_HOLD=<毫秒>` 调节停留时长），用来检查提示样式
 - `S1_INLINE_NOTICE=<文字>` 强制显示列表内的错误提示条，用来检查重试/关闭样式
+- `S1_NO_RESTORE=1` 忽略阅读位置记忆，让截图从第 1 页开始
 - `S1_SLOW=<毫秒>` 让每个 API 请求先等待该时长，用来把加载态拉长以便连拍检查骨架屏与过渡动画
 - `S1_CHECK_NEW=1` 打开主题后直接检查最新回复，用来检查底部上滑刷新（模拟器做不出下拉手势）
 - `S1_DEMO=1` 注入假账号（S1er / 管理员）、假提醒与假收藏，用于在没有真实账号时检查登录后的界面：

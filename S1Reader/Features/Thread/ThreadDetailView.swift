@@ -137,6 +137,11 @@ final class ThreadDetailViewModel {
 
     /// Jumps back to the post the reader stopped at last time.
     func restoreReadingPosition() async {
+        // S1_NO_RESTORE=1 lets a screenshot start at page 1 even when this thread
+        // remembers a position (the app otherwise re-saves on every scroll).
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["S1_NO_RESTORE"] != nil { return }
+        #endif
         guard let saved = ReadingProgressStore.shared.position(for: summary.tid) else { return }
         let perPage = max(1, self.perPage)
         let targetPage = max(1, Int(ceil(Double(saved.position) / Double(perPage))))

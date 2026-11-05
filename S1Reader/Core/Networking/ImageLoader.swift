@@ -17,6 +17,7 @@ actor ImageLoader {
 
     private let cache: NSCache<NSURL, UIImage>
     private let session: URLSession
+    private var probingAspects: Set<URL> = []
     private var inFlight: [URL: Task<UIImage?, Never>] = [:]
 
     init() {
@@ -37,6 +38,40 @@ actor ImageLoader {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
         ]
         session = URLSession(configuration: configuration)
+    }
+
+    /// Asks for just the first bytes of a picture to learn its aspect ratio.
+    ///
+    /// The body is downloaded lazily by `image(for:)` once the row is on screen;
+    /// this early peek exists only so the placeholder can reserve the exact
+    /// height and the list stops jumping when the picture lands.
+    func aspectRatio(for url: URL) async -> CGFloat? {
+        if let known = await ImageAspectStore.shared.aspect(for: url) { return known }
+        if probingAspects.contains(url) { return nil }
+        probingAspects.insert(url)
+        defer { probingAspects.remove(url) }
+
+        var request = URLRequest(url: url)
+        request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
+
+        guard let (data, _) = try? await session.data(for: request), !data.isEmpty,
+              let aspect = Self.aspectRatio(from: data) else { return nil }
+        #if DEBUG
+        print("S1 image probe \(url.lastPathComponent) aspect=\(String(format: "%.3f", aspect)) bytes=\(data.count)")
+        #endif
+        await ImageAspectStore.shared.store(aspect: aspect, for: url)
+        return aspect
+    }
+
+    /// Reads the pixel size straight out of the (partial) image bytes.
+    private static func aspectRatio(from data: Data) -> CGFloat? {
+        guard let source = CGImageSourceCreateIncremental(nil as CFDictionary?) as CGImageSource? else { return nil }
+        CGImageSourceUpdateData(source, data as CFData, false)
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+              width > 0, height > 0 else { return nil }
+        return CGFloat(width / height)
     }
 
     func image(for url: URL) async -> UIImage? {
@@ -117,10 +152,13 @@ struct RemoteImage: View {
     /// Lets a caller that already knows the picture is on screen start at once
     /// (the full-screen viewer), instead of waiting for the scroll signal.
     var startsLoadingImmediately = false
+    /// Upper bound so a very tall picture cannot swallow the whole screen.
+    var maxHeight: CGFloat = 460
 
     @State private var image: UIImage?
     @State private var didFail = false
     @State private var isOnScreen = false
+    @State private var aspect: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -135,28 +173,42 @@ struct RemoteImage: View {
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, minHeight: 80)
             } else {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(.tertiarySystemFill))
-                    .frame(height: 120)
-                    .overlay(ProgressView())
+                placeholder
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: image == nil ? maxHeight : nil)
         // Pictures arrive at different moments; a short fade keeps them from
         // popping in mid-scroll.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: image == nil)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: didFail)
+        // Reserved space follows the real ratio once the peek answers, so the
+        // list settles instead of snapping when the picture lands.
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: aspect)
         .visibleInScroll { visible in
             isOnScreen = visible
             if visible { load() }
         }
+        .task(id: url.absoluteString) {
+            if aspect == nil { aspect = await ImageAspectStore.shared.aspect(for: url) }
+        }
         .onChange(of: url) {
             image = nil
             didFail = false
+            aspect = nil
             load()
         }
         .onAppear {
             if startsLoadingImmediately { load() }
         }
+    }
+
+    /// Same footprint the picture will occupy: known ratio if we have it, a
+    /// plain grey card at a sensible ratio until the peek answers.
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color(uiColor: .tertiarySystemFill))
+            .aspectRatio(aspect ?? 4.0 / 3.0, contentMode: .fit)
+            .overlay(ProgressView())
     }
 
     /// Fetches only once the picture is actually on screen; pictures that were
@@ -172,9 +224,29 @@ struct RemoteImage: View {
         #if DEBUG
         print("S1 image start \(url.lastPathComponent)")
         #endif
+        // Learn the size first: it is a few kilobytes and keeps the row from
+        // resizing once the body shows up.
+        if aspect == nil {
+            Task {
+                if let probed = await ImageLoader.shared.aspectRatio(for: url) {
+                    aspect = probed
+                }
+            }
+        }
         Task {
             let loaded = await ImageLoader.shared.image(for: url)
-            if loaded == nil { didFail = true } else { image = loaded }
+            if let loaded {
+                image = loaded
+                if aspect == nil, loaded.size.height > 0 {
+                    aspect = loaded.size.width / loaded.size.height
+                }
+                await ImageAspectStore.shared.store(
+                    aspect: loaded.size.width / max(1, loaded.size.height),
+                    for: url
+                )
+            } else {
+                didFail = true
+            }
         }
     }
 }
