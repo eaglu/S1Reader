@@ -309,6 +309,11 @@ struct ThreadDetailView: View {
                 try? await Task.sleep(for: .milliseconds(300))
                 visiblePid = pid
             }
+            if let raw = ProcessInfo.processInfo.environment["S1_VIEW_IMAGE"],
+               let target = URL(string: raw) {
+                try? await Task.sleep(for: .milliseconds(1200))
+                viewerImage = ImageReference(url: target)
+            }
             // S1_CLEAR_IMAGES=1 drops this thread's cached pictures so the eviction
             // path can be checked without tapping the menu.
             if ProcessInfo.processInfo.environment["S1_CLEAR_IMAGES"] == "1" {
@@ -568,16 +573,33 @@ private struct ImageViewer: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView([.horizontal, .vertical]) {
-                RemoteImage(url: url)
-                    .scaleEffect(scale)
-                    .gesture(
-                        MagnifyGesture()
-                            .onChanged { value in
-                                scale = max(1, value.magnification)
+            GeometryReader { proxy in
+                ScrollView([.horizontal, .vertical]) {
+                    // Fitting the picture into the viewport height as well as its
+                    // width is what shows the whole image instead of its top
+                    // slice; the trailing frame reserves scroll space when zoomed.
+                    RemoteImage(url: url, contentMode: .fit)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .scaleEffect(scale)
+                        .frame(width: proxy.size.width * scale, height: proxy.size.height * scale)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipShape(DeviceCornerShape())
+                .contentShape(Rectangle())
+                .gesture(
+                    MagnifyGesture()
+                        .onChanged { value in
+                            scale = min(max(1, value.magnification), 4)
+                        }
+                        .onEnded { value in
+                            withAnimation(.snappy) {
+                                scale = min(max(1, value.magnification), 4)
                             }
-                    )
-                    .frame(maxWidth: .infinity)
+                        }
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation(.snappy) { scale = scale > 1 ? 1 : 2.5 }
+                }
             }
             .background(Color.black)
             .alert(message ?? "", isPresented: Binding(

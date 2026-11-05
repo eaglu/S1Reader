@@ -73,26 +73,22 @@ struct PostContentView: View {
 
     private var blocks: [Block] {
         var result: [Block] = []
-        var text = Text("")
-        var hasText = false
+        var pieces: [Text] = []
 
         func flush() {
-            guard hasText else { return }
-            result.append(.text(text))
-            text = Text("")
-            hasText = false
+            guard !pieces.isEmpty else { return }
+            result.append(.text(pieces.reduce(Text(""), +)))
+            pieces.removeAll()
         }
 
         for node in nodes {
             switch node {
             case .text(let attributed):
-                text = text + Text(attributed)
-                hasText = true
+                pieces.append(Text(attributed))
             case .image(let url, let isSmiley):
                 if isSmiley {
                     if let image = smileys[url] {
-                        text = text + Text(Image(uiImage: image))
-                        hasText = true
+                        pieces.append(Text(Image(uiImage: image)))
                     }
                 } else {
                     flush()
@@ -139,7 +135,7 @@ struct PostContentView: View {
                     } label: {
                         RemoteImage(url: url, contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: 460)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .clipShape(DeviceCornerShape())
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
