@@ -4,6 +4,7 @@ import UIKit
 struct PostRowView: View {
     let post: Post
     var onImageTap: (URL) -> Void = { _ in }
+    var onQuoteTap: (String) -> Void = { _ in }
 
     @State private var nodes: [PostNode] = []
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -15,7 +16,7 @@ struct PostRowView: View {
                 Text(" ")
                     .redacted(reason: .placeholder)
             } else {
-                PostContentView(nodes: nodes, onImageTap: onImageTap)
+                PostContentView(nodes: nodes, onImageTap: onImageTap, onQuoteTap: onQuoteTap)
                     .contextMenu { menu }
             }
         }
@@ -90,6 +91,7 @@ struct PostRowView: View {
 struct PostContentView: View {
     let nodes: [PostNode]
     var onImageTap: (URL) -> Void = { _ in }
+    var onQuoteTap: (String) -> Void = { _ in }
 
     @State private var smileys: [URL: UIImage] = [:]
     @State private var saveMessage: String?
@@ -98,7 +100,7 @@ struct PostContentView: View {
 
     private enum Block {
         case text(Text)
-        case quote(AttributedString)
+        case quote(AttributedString, String?)
         case image(URL)
     }
 
@@ -125,9 +127,9 @@ struct PostContentView: View {
                     flush()
                     result.append(.image(url))
                 }
-            case .quote(let attributed):
+            case .quote(let attributed, let pid):
                 flush()
-                result.append(.quote(attributed))
+                result.append(.quote(attributed, pid))
             }
         }
         flush()
@@ -142,24 +144,22 @@ struct PostContentView: View {
                     text
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                case .quote(let attributed):
-                    Text(attributed)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                        .padding(.leading, 12)
-                        .padding(.trailing, 10)
-                        .background(
-                            Color(uiColor: .tertiarySystemFill),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                        .overlay(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.5))
-                                .frame(width: 3)
-                                .padding(.vertical, 6)
+                case .quote(let attributed, let pid):
+                    if let pid {
+                        Button {
+                            onQuoteTap(pid)
+                        } label: {
+                            QuoteCard(attributed: attributed, tappable: true)
                         }
+                        .buttonStyle(QuoteCardButtonStyle())
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("引用的回复")
+                        .accessibilityHint("双击跳到被引用的楼层")
+                        .accessibilityAddTraits(.isButton)
+                    } else {
+                        QuoteCard(attributed: attributed, tappable: false)
+                            .textSelection(.enabled)
+                    }
                 case .image(let url):
                     Button {
                         onImageTap(url)
@@ -242,5 +242,45 @@ struct PostContentView: View {
         return UIGraphicsImageRenderer(size: size, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: size))
         }
+    }
+}
+
+/// One quoted block. Tappable quotes get a brighter spine and a press state so
+/// it reads as a control without looking like a second reply.
+private struct QuoteCard: View {
+    let attributed: AttributedString
+    let tappable: Bool
+
+    var body: some View {
+        HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(Color.accentColor.opacity(tappable ? 0.8 : 0.5))
+                .frame(width: 3)
+                .padding(.vertical, 6)
+
+            Text(attributed)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+                .padding(.leading, 9)
+                .padding(.trailing, 10)
+        }
+        .background(
+            Color(uiColor: .tertiarySystemFill),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct QuoteCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(configuration.isPressed ? Color.primary.opacity(0.06) : Color.clear)
+            }
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }

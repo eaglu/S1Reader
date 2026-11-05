@@ -62,6 +62,9 @@ actor APIClient {
     private let endpoint = URL(string: "https://stage1st.com/2b/api/mobile/index.php")!
 
     private let session: URLSession
+    /// Stops at the first redirect so a `goto=findpost` link can be resolved to
+    /// its page number without downloading the thread page itself.
+    private let redirectProbe: URLSession
     var formhash: String?
     var member: Member?
     private(set) var lastFailure: APIFailure?
@@ -86,6 +89,29 @@ actor APIClient {
             "Referer": "https://stage1st.com/2b/"
         ]
         session = URLSession(configuration: configuration)
+        redirectProbe = URLSession(
+            configuration: .ephemeral,
+            delegate: NoRedirectSession(),
+            delegateQueue: nil
+        )
+    }
+
+    /// Which page a floor lives on. Discuz answers `goto=findpost` with a 301 to
+    /// `…&page=N`, which is far cheaper than paging through a 400-page thread.
+    func page(containingPost pid: String, tid: String) async -> Int? {
+        guard !pid.isEmpty,
+              let url = URL(string: "forum.php?mod=redirect&goto=findpost&ptid=\(tid)&pid=\(pid)",
+                            relativeTo: Self.baseURL) else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 12
+
+        guard let (_, response) = try? await redirectProbe.data(for: request),
+              let http = response as? HTTPURLResponse,
+              let location = http.value(forHTTPHeaderField: "Location"),
+              let range = location.range(of: "page=") else { return nil }
+        let digits = location[range.upperBound...].prefix { $0.isNumber }
+        return Int(digits)
     }
 
     var cachedMember: Member? { member }
@@ -439,5 +465,19 @@ actor APIClient {
         if let cookies = HTTPCookieStorage.shared.cookies(for: Self.baseURL) {
             cookies.forEach(HTTPCookieStorage.shared.deleteCookie)
         }
+    }
+}
+
+/// Blocks redirects so the caller can read the `Location` header instead of
+/// following it into a full page load.
+private final class NoRedirectSession: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

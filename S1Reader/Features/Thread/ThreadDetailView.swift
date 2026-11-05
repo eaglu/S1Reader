@@ -14,6 +14,10 @@ final class ThreadDetailViewModel {
     var perPage = 40
     var isLoading = false
     var isLoadingMore = false
+    /// True while the bottom of the list asks the server for new replies.
+    var isCheckingNewReplies = false
+    /// Result of the last bottom pull, shown under the last post.
+    var lastCheckMessage: String?
     var errorMessage: String?
     var loadedPages = 0
     /// Lowest page currently in `posts`; above 1 the list can still scroll up.
@@ -204,6 +208,40 @@ final class ThreadDetailViewModel {
         }
     }
 
+    /// Re-fetches the last loaded page and appends replies that arrived since.
+    /// Returns how many were added, or `nil` when the request failed.
+    @discardableResult
+    func refreshNewReplies() async -> Int? {
+        guard !isCheckingNewReplies, !posts.isEmpty, !isLoading else { return nil }
+        isCheckingNewReplies = true
+        lastCheckMessage = nil
+        defer { isCheckingNewReplies = false }
+
+        do {
+            let result = try await fetchPage(max(1, loadedPages))
+            let known = Set(posts.map(\.pid))
+            let fresh = result.posts.filter { !known.contains($0.pid) }
+            if let info = result.thread {
+                title = info.subject
+                views = info.views
+                totalPosts = info.replies + 1
+            }
+            if !fresh.isEmpty {
+                posts.append(contentsOf: fresh)
+                hasMore = posts.count < totalPosts
+                ThreadVisitStore.shared.markSeen(tid: summary.tid, replies: max(0, totalPosts - 1))
+            }
+            lastCheckMessage = fresh.isEmpty ? "暂无新回复" : "已加载 \(fresh.count) 条新回复"
+            #if DEBUG
+            print("S1 refreshNewReplies page=\(loadedPages) added=\(fresh.count) posts=\(posts.count) total=\(totalPosts)")
+            #endif
+            return fresh.count
+        } catch {
+            lastCheckMessage = "检查失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
     /// Fetches the page above the one that is loaded and puts it in front of the
     /// list. Returns the post that was on top so the reader keeps their place.
     @discardableResult
@@ -258,6 +296,15 @@ struct ThreadDetailView: View {
     /// pulled once per approach instead of as fast as the screen can fill.
     @State private var lastNextPageAnchor = Marker.none
     @State private var lastEarlierPageAnchor = Marker.none
+    /// Where the reader stood before jumping to a quoted floor; drives the
+    /// floating button's second state.
+    @State private var returnPid: String?
+    @State private var highlightedPid: String?
+    @State private var highlightTask: Task<Void, Never>?
+    @State private var quoteNotice: String?
+    /// Overscroll is ignored briefly after a jump, so the programmatic scroll
+    /// cannot be mistaken for the reader pulling the list.
+    @State private var ignoreOverscrollUntil = Date.distantPast
 
     private enum Marker {
         /// Never equal to a real anchor, so the first approach always loads.
@@ -274,93 +321,18 @@ struct ThreadDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ThreadHeaderView(
-                    title: model.title,
-                    author: model.summary.author,
-                    posts: model.totalPosts,
-                    views: model.views
-                )
-
-                if let error = model.errorMessage, model.posts.isEmpty {
-                    ThreadErrorState(
-                        message: error,
-                        tid: model.summary.tid,
-                        isLoggedIn: app.isLoggedIn,
-                        onRetry: { Task { await model.reload() } },
-                        onLogin: { showLogin = true }
-                    )
-                }
-
-                earlierRow
-
-                ForEach(visiblePosts) { post in
-                    PostRowView(post: post, onImageTap: openImage)
-                        .id(post.pid)
-                        .onAppear {
-                            guard post.pid == visiblePosts.last?.pid else { return }
-                            guard lastNextPageAnchor != topAnchorKey else {
-                                #if DEBUG
-                                print("S1 loadMore skipped: same approach (top=\(topAnchorKey))")
-                                #endif
-                                return
-                            }
-                            lastNextPageAnchor = topAnchorKey
-                            Task { await model.loadMore() }
-                        }
-                    Divider()
-                }
-
-                ThreadListFooter(
-                    isLoadingMore: model.isLoadingMore,
-                    hasPosts: !model.posts.isEmpty,
-                    range: model.loadedPageRange,
-                    loaded: model.posts.count,
-                    total: model.totalPosts
-                )
+        scrollArea
+            .onChange(of: model.focusPid) { _, pid in
+                guard let pid else { return }
+                reveal(pid)
+                model.focusPid = nil
             }
-            .modifier(ReadableWidth())
-            .scrollTargetLayout()
-        }
-        .scrollPosition(id: $visiblePid, anchor: .top)
-        .modifier(LoadEarlierOnOverscroll(isEnabled: model.hasEarlier) {
-            Task { await loadEarlierKeepingPlace() }
-        })
-        .opacity(isRestoringPosition ? 0 : 1)
-        .overlay {
-            if isRestoringPosition {
-                ProgressView()
+            .onChange(of: visiblePid) { _, pid in
+                saveReadingPosition(pid)
             }
-        }
-        .contentMargins(.bottom, 72, for: .scrollContent)
-        // A single compact button; the extra bottom margin keeps it clear of the
-        // page footer while the thread scrolls under it.
-        .overlay(alignment: .bottomTrailing) {
-            ReplyFloatingButton {
-                if app.isLoggedIn {
-                    showComposer = true
-                } else {
-                    showLogin = true
-                }
+            .onDisappear {
+                saveReadingPosition(visiblePid, immediate: true)
             }
-        }
-        .onChange(of: model.focusPid) { _, pid in
-            guard let pid else { return }
-            didRestorePosition = true
-            if reduceMotion {
-                visiblePid = pid
-            } else {
-                withAnimation(.easeInOut(duration: 0.25)) { visiblePid = pid }
-            }
-            model.focusPid = nil
-        }
-        .onChange(of: visiblePid) { _, pid in
-            saveReadingPosition(pid)
-        }
-        .onDisappear {
-            saveReadingPosition(visiblePid, immediate: true)
-        }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.posts.count) {
@@ -432,6 +404,26 @@ struct ThreadDetailView: View {
                let target = URL(string: raw) {
                 try? await Task.sleep(for: .milliseconds(1200))
                 openImage(target)
+            }
+            // S1_QUOTE_TAP=<pid> follows a quote (the button turns into "back");
+            // S1_QUOTE_BACK=1 then takes it, so both states can be filmed.
+            if let pid = ProcessInfo.processInfo.environment["S1_QUOTE_TAP"], !pid.isEmpty {
+                // Wait for the first page, otherwise there is no origin to return to.
+                for _ in 0..<25 where model.posts.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                try? await Task.sleep(for: .milliseconds(600))
+                await jump(to: pid)
+                if ProcessInfo.processInfo.environment["S1_QUOTE_BACK"] == "1" {
+                    try? await Task.sleep(for: .milliseconds(1800))
+                    returnToOrigin()
+                }
+            }
+            // S1_CHECK_NEW=1 exercises the bottom pull without a gesture.
+            if ProcessInfo.processInfo.environment["S1_CHECK_NEW"] == "1" {
+                try? await Task.sleep(for: .milliseconds(1500))
+                let added = await model.refreshNewReplies()
+                print("S1_CHECK_NEW added=\(added.map(String.init) ?? "nil") message=\(model.lastCheckMessage ?? "-")")
             }
             // S1_POP=1 pops back to the list so the tab bar's return can be filmed.
             if ProcessInfo.processInfo.environment["S1_POP"] == "1" {
@@ -512,47 +504,59 @@ struct ThreadDetailView: View {
         }
         .sensoryFeedback(.impact(weight: .light), trigger: isFavorite)
         .sensoryFeedback(.selection, trigger: onlyOriginalPoster)
-        .alert(cacheNotice ?? "", isPresented: Binding(
-            get: { cacheNotice != nil },
-            set: { if !$0 { cacheNotice = nil } }
-        )) {
+        .alert(cacheNotice ?? "", isPresented: isShowingCacheNotice) {
             Button("好", role: .cancel) { cacheNotice = nil }
         }
-        .alert("收藏失败", isPresented: Binding(
-            get: { favoriteError != nil },
-            set: { if !$0 { favoriteError = nil } }
-        )) {
+        .alert(quoteNotice ?? "", isPresented: isShowingQuoteNotice) {
+            Button("好", role: .cancel) { quoteNotice = nil }
+        }
+        .alert("收藏失败", isPresented: isShowingFavoriteError) {
             Button("好", role: .cancel) { favoriteError = nil }
         } message: {
             Text(favoriteError ?? "")
         }
-        .sheet(isPresented: $showPageJump) {
-            PageJumpSheet(current: model.loadedPages, total: model.pageCount) { page in
-                Task { await model.loadPage(page) }
-            }
-        }
-        .sheet(isPresented: $showComposer) {
-            ReplyComposer(threadTitle: model.title) { text in
-                let pid = try await APIClient.shared.reply(tid: model.summary.tid, message: text)
-                await model.loadPage(model.pageCount)
-                model.focusPid = pid
-            }
-        }
-        .sheet(isPresented: $showLogin) {
-            LoginView()
-        }
-        .fullScreenCover(isPresented: Binding(
-            get: { viewerIndex != nil },
-            set: { if !$0 { viewerIndex = nil } }
-        )) {
-            ImageBrowser(
-                urls: threadImageURLs,
-                index: Binding(get: { viewerIndex ?? 0 }, set: { viewerIndex = $0 })
-            )
+        .sheet(isPresented: $showPageJump) { pageJumpSheet }
+        .sheet(isPresented: $showComposer) { composerSheet }
+        .sheet(isPresented: $showLogin) { LoginView() }
+        .fullScreenCover(isPresented: isShowingViewer) {
+            ImageBrowser(urls: threadImageURLs, index: viewerIndexBinding)
         }
     }
 
+    private var pageJumpSheet: some View {
+        PageJumpSheet(current: model.loadedPages, total: model.pageCount) { page in
+            Task { await model.loadPage(page) }
+        }
+    }
 
+    private var composerSheet: some View {
+        let tid = model.summary.tid
+        return ReplyComposer(threadTitle: model.title) { text in
+            let pid = try await APIClient.shared.reply(tid: tid, message: text)
+            await model.loadPage(model.pageCount)
+            model.focusPid = pid
+        }
+    }
+
+    private var isShowingCacheNotice: Binding<Bool> {
+        Binding(get: { cacheNotice != nil }, set: { if !$0 { cacheNotice = nil } })
+    }
+
+    private var isShowingQuoteNotice: Binding<Bool> {
+        Binding(get: { quoteNotice != nil }, set: { if !$0 { quoteNotice = nil } })
+    }
+
+    private var isShowingFavoriteError: Binding<Bool> {
+        Binding(get: { favoriteError != nil }, set: { if !$0 { favoriteError = nil } })
+    }
+
+    private var isShowingViewer: Binding<Bool> {
+        Binding(get: { viewerIndex != nil }, set: { if !$0 { viewerIndex = nil } })
+    }
+
+    private var viewerIndexBinding: Binding<Int> {
+        Binding(get: { viewerIndex ?? 0 }, set: { viewerIndex = $0 })
+    }
 }
 
 /// Thread title block, kept out of the main view so its body stays readable.
@@ -584,45 +588,243 @@ struct ThreadHeaderView: View {
     }
 }
 
-/// Floating reply action: one button, no bar. On iOS 26 and later it is a real
-/// Liquid Glass button, so it picks up the same material as the system chrome
-/// instead of a hand-drawn circle.
-struct ReplyFloatingButton: View {
+/// Floating action in the bottom-trailing corner. One button, two states: reply,
+/// and — once a quote has been followed — back to where the reader was. On
+/// iOS 26 and later it is a real Liquid Glass button, so it picks up the same
+/// material as the system chrome instead of a hand-drawn circle.
+struct ThreadActionButton: View {
+    enum Mode {
+        case reply
+        case back
+    }
+
+    let mode: Mode
     var action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if #available(iOS 26.0, *) {
             Button(action: action) {
-                Image(systemName: "arrowshape.turn.up.left.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                glyphs
                     .frame(width: 52, height: 52)
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
             .tint(Color.accentColor)
-            .accessibilityLabel("回复本帖")
+            .accessibilityLabel(mode == .reply ? "回复本帖" : "返回到刚才的楼")
+            .sensoryFeedback(.impact(weight: .light), trigger: mode)
             .padding(.trailing, 18)
             .padding(.bottom, 18)
         } else {
             Button(action: action) {
-                Image(systemName: "arrowshape.turn.up.left.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                glyphs
                     .foregroundStyle(.white)
                     .frame(width: 52, height: 52)
                     .background(Color.accentColor, in: Circle())
                     .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("回复本帖")
+            .accessibilityLabel(mode == .reply ? "回复本帖" : "返回到刚才的楼")
+            .sensoryFeedback(.impact(weight: .light), trigger: mode)
             .padding(.trailing, 18)
             .padding(.bottom, 18)
         }
+    }
+
+    /// Both glyphs share one font, so the two states keep the same weight; the
+    /// outgoing one turns and shrinks away while the incoming one lands.
+    private var glyphs: some View {
+        ZStack {
+            glyph(.reply).modifier(SwapTransition(isActive: mode == .reply, reduceMotion: reduceMotion))
+            glyph(.back).modifier(SwapTransition(isActive: mode == .back, reduceMotion: reduceMotion))
+        }
+    }
+
+    private func glyph(_ glyphMode: Mode) -> some View {
+        Image(systemName: glyphMode == .reply ? "arrow.turn.up.left" : "arrow.uturn.backward")
+            .font(.system(size: 20, weight: .semibold))
+    }
+}
+
+/// Turning one glyph out while the other turns in, so the change reads as a
+/// single control swapping purpose rather than a second button appearing.
+private struct SwapTransition: ViewModifier {
+    let isActive: Bool
+    let reduceMotion: Bool
+
+    private var turn: Double { reduceMotion ? 0 : (isActive ? 0 : (isActive ? 120 : -120)) }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isActive ? 1 : 0)
+            .rotationEffect(.degrees(isActive ? 0 : 120))
+            .scaleEffect(isActive ? 1 : (reduceMotion ? 1 : 0.72))
+            .animation(
+                reduceMotion
+                    ? .easeInOut(duration: 0.2)
+                    : .spring(response: 0.42, dampingFraction: 0.72),
+                value: isActive
+            )
     }
 }
 
 // Helpers live in an extension so the view body stays inside the length the
 // lint rules allow; same file, so `private` state is still reachable.
 extension ThreadDetailView {
+    /// The scrolling list plus everything pinned to it. Kept out of `body` so the
+    /// view stays inside what the type checker will accept in one expression.
+    private var scrollArea: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ThreadHeaderView(
+                    title: model.title,
+                    author: model.summary.author,
+                    posts: model.totalPosts,
+                    views: model.views
+                )
+
+                if let error = model.errorMessage, model.posts.isEmpty {
+                    ThreadErrorState(
+                        message: error,
+                        tid: model.summary.tid,
+                        isLoggedIn: app.isLoggedIn,
+                        onRetry: { Task { await model.reload() } },
+                        onLogin: { showLogin = true }
+                    )
+                }
+
+                earlierRow
+
+                ForEach(visiblePosts) { post in
+                    postRow(post)
+                    Divider()
+                }
+
+                ThreadListFooter(
+                    isLoadingMore: model.isLoadingMore,
+                    hasPosts: !model.posts.isEmpty,
+                    range: model.loadedPageRange,
+                    loaded: model.posts.count,
+                    total: model.totalPosts
+                )
+
+                NewRepliesHint(
+                    isChecking: model.isCheckingNewReplies,
+                    message: model.lastCheckMessage,
+                    hasPosts: !model.posts.isEmpty
+                )
+            }
+            .modifier(ReadableWidth())
+            .scrollTargetLayout()
+        }
+        .scrollPosition(id: $visiblePid, anchor: .top)
+        .modifier(LoadEarlierOnOverscroll(isEnabled: model.hasEarlier) {
+            Task { await loadEarlierKeepingPlace() }
+        })
+        .modifier(CheckNewRepliesOnOverscroll(isEnabled: canCheckNewReplies) {
+            Task { await model.refreshNewReplies() }
+        })
+        .opacity(isRestoringPosition ? 0 : 1)
+        .overlay { if isRestoringPosition { ProgressView() } }
+        .contentMargins(.bottom, 72, for: .scrollContent)
+        // A single compact button; the extra bottom margin keeps it clear of the
+        // page footer while the thread scrolls under it. It turns into a way back
+        // once a quote has been followed.
+        .overlay(alignment: .bottomTrailing) {
+            ThreadActionButton(mode: returnPid == nil ? .reply : .back) {
+                primaryAction()
+            }
+        }
+    }
+
+    private var canCheckNewReplies: Bool {
+        !model.posts.isEmpty && model.loadedPages >= model.pageCount
+    }
+
+    private func postRow(_ post: Post) -> some View {
+        PostRowView(
+            post: post,
+            onImageTap: openImage,
+            onQuoteTap: { pid in Task { await jump(to: pid) } }
+        )
+        .id(post.pid)
+        .background(post.pid == highlightedPid ? Color.accentColor.opacity(0.12) : Color.clear)
+        .animation(.easeOut(duration: 0.35), value: highlightedPid)
+        .onAppear {
+            guard post.pid == visiblePosts.last?.pid else { return }
+            guard lastNextPageAnchor != topAnchorKey else { return }
+            lastNextPageAnchor = topAnchorKey
+            Task { await model.loadMore() }
+        }
+    }
+
+    /// Reply normally; once a quote has been followed the same button goes back.
+    private func primaryAction() {
+        if returnPid != nil {
+            returnToOrigin()
+        } else if app.isLoggedIn {
+            showComposer = true
+        } else {
+            showLogin = true
+        }
+    }
+
+    /// Jumps to the floor a quote points at, loading its page first when needed.
+    private func jump(to pid: String) async {
+        // `visiblePid` is only tracked once the list has settled, so fall back to
+        // the post at the top of what is loaded.
+        let origin = visiblePid ?? model.posts.first?.pid
+        if !model.posts.contains(where: { $0.pid == pid }) {
+            guard let page = await APIClient.shared.page(
+                containingPost: pid,
+                tid: model.summary.tid
+            ) else {
+                quoteNotice = "找不到被引用的楼层，可能已经被删除。"
+                return
+            }
+            await model.loadPage(page)
+            guard model.posts.contains(where: { $0.pid == pid }) else {
+                quoteNotice = "被引用的楼层不在这 40 楼里，可能已经被删除。"
+                return
+            }
+        }
+        if let origin, origin != pid {
+            returnPid = origin
+        }
+        reveal(pid)
+    }
+
+    private func returnToOrigin() {
+        guard let pid = returnPid else { return }
+        returnPid = nil
+        Task {
+            if !model.posts.contains(where: { $0.pid == pid }),
+               let page = await APIClient.shared.page(containingPost: pid, tid: model.summary.tid) {
+                await model.loadPage(page)
+            }
+            reveal(pid)
+        }
+    }
+
+    /// Scrolls to a floor and flashes it so the jump has a visible landing spot.
+    private func reveal(_ pid: String) {
+        didRestorePosition = true
+        ignoreOverscrollUntil = Date().addingTimeInterval(1.2)
+        if reduceMotion {
+            visiblePid = pid
+        } else {
+            withAnimation(.easeInOut(duration: 0.3)) { visiblePid = pid }
+        }
+        highlightedPid = pid
+        highlightTask?.cancel()
+        highlightTask = Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.4)) { highlightedPid = nil }
+        }
+    }
+
     @ViewBuilder
     private var earlierRow: some View {
         if model.hasEarlier {
@@ -640,6 +842,7 @@ extension ThreadDetailView {
     /// prepending content does not shove the reader's place down the screen.
     private func loadEarlierKeepingPlace(force: Bool = false) async {
         guard !model.isLoadingMore else { return }
+        guard Date() > ignoreOverscrollUntil else { return }
         // Pulling past the top fires many times in a row; one page per approach.
         if !force {
             guard lastEarlierPageAnchor != topAnchorKey else {
@@ -651,9 +854,12 @@ extension ThreadDetailView {
         }
         lastEarlierPageAnchor = topAnchorKey
         let topBefore = visiblePid
-        guard let anchor = await model.loadEarlier() else {
+        guard let fallback = await model.loadEarlier() else {
             return
         }
+        // Pin the post the reader was looking at; prepending a page would
+        // otherwise shove them up by exactly one page of replies.
+        let anchor = topBefore ?? fallback
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {

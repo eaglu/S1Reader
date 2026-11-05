@@ -6,7 +6,8 @@ enum PostNode: Hashable {
     case image(URL, isSmiley: Bool)
     /// A quoted block (`<div class="reply_wrap">` / `<blockquote>`), rendered as
     /// its own indented card so it cannot be confused with the reply body.
-    case quote(AttributedString)
+    /// `pid` is the quoted floor, when the original post linked to it.
+    case quote(AttributedString, pid: String?)
 }
 
 /// Converts the HTML fragment returned by the mobile API into renderable nodes.
@@ -52,7 +53,9 @@ enum HTMLParser {
         var text = ""
         for node in parse(html) {
             switch node {
-            case .text(let value), .quote(let value):
+            case .text(let value):
+                text += String(value.characters)
+            case .quote(let value, _):
                 text += String(value.characters)
             case .image:
                 continue
@@ -71,6 +74,13 @@ enum HTMLParser {
             lines.append(trimmed)
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Floor id of a `goto=findpost` link, used to make quotes tappable.
+    static func pidInFindPost(_ href: String) -> String? {
+        guard href.contains("findpost"), let range = href.range(of: "pid=") else { return nil }
+        let digits = href[range.upperBound...].prefix { $0.isNumber }
+        return digits.isEmpty ? nil : String(digits)
     }
 
     /// Non-smiley images referenced by a post, used for cache bookkeeping.
@@ -242,6 +252,7 @@ private struct PostBuilder {
     private var skipping: String?
     private var atLineStart = true
     private var quoteBuffer: AttributedString?
+    private var quotePID: String?
     private var quoteDepth = 0
     private var divDepth = 0
     private var quoteDivDepths: [Int] = []
@@ -378,6 +389,11 @@ private struct PostBuilder {
                 style.color = color
             }
         case "a":
+            // Linked quotes carry the target floor in their header link.
+            if quoteBuffer != nil, !isClosing, let href = attributes["href"],
+               let pid = HTMLParser.pidInFindPost(HTMLParser.decodeEntities(href)) {
+                quotePID = pid
+            }
             update(tag: "a", isClosing: isClosing) { style in
                 guard let href = attributes["href"], let url = HTMLParser.resolveURL(href) else { return }
                 style.link = url
@@ -470,8 +486,9 @@ private struct PostBuilder {
             copy.removeSubrange(copy.index(copy.endIndex, offsetByCharacters: -1)..<copy.endIndex)
         }
         if !copy.characters.isEmpty {
-            nodes.append(.quote(copy))
+            nodes.append(.quote(copy, pid: quotePID))
         }
+        quotePID = nil
     }
 
     // MARK: - Images
