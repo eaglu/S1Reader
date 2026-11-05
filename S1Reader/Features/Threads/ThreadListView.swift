@@ -80,6 +80,20 @@ struct ThreadListView: View {
 
     @State private var model: ThreadListViewModel
     @State private var showOnlyToday = false
+    @State private var query = Self.initialQuery
+
+    /// Debug hook so the search field can be filled from the command line.
+    private static var initialQuery: String {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["S1_SEARCH"] ?? ""
+        #else
+        ""
+        #endif
+    }
+
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     init(forum: Forum) {
         self.forum = forum
@@ -87,7 +101,14 @@ struct ThreadListView: View {
     }
 
     private var visibleThreads: [ThreadSummary] {
-        showOnlyToday ? model.threads.filter(\.isPinned) + model.threads.filter { !$0.isPinned && $0.isToday } : model.threads
+        let base = showOnlyToday
+            ? model.threads.filter(\.isPinned) + model.threads.filter { !$0.isPinned && $0.isToday }
+            : model.threads
+        guard !trimmedQuery.isEmpty else { return base }
+        return base.filter {
+            $0.subject.localizedStandardContains(trimmedQuery)
+                || $0.author.localizedStandardContains(trimmedQuery)
+        }
     }
 
     var body: some View {
@@ -102,6 +123,16 @@ struct ThreadListView: View {
                         Button("重试") { Task { await model.reload() } }
                             .buttonStyle(.borderedProminent)
                     }
+                }
+            }
+
+            if model.isLoading && model.threads.isEmpty {
+                ForEach(0..<8, id: \.self) { _ in
+                    SkeletonThreadRow()
+                }
+            } else if !trimmedQuery.isEmpty && visibleThreads.isEmpty {
+                Section {
+                    ContentUnavailableView.search(text: trimmedQuery)
                 }
             }
 
@@ -125,18 +156,18 @@ struct ThreadListView: View {
                 .listRowSeparator(.hidden)
             }
         }
-        .listStyle(.plain)
+        .modifier(AdaptiveThreadListStyle())
         .navigationTitle(forum.name)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索主题或作者")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.reload() }
         .task { await model.loadIfNeeded() }
         .overlay {
-            if model.isLoading && model.threads.isEmpty {
-                ProgressView()
-            } else if !model.isLoading && model.threads.isEmpty && model.errorMessage == nil {
+            if !model.isLoading && model.threads.isEmpty && model.errorMessage == nil && trimmedQuery.isEmpty {
                 ContentUnavailableView("暂无主题", systemImage: "text.bubble")
             }
         }
+        .sensoryFeedback(.selection, trigger: showOnlyToday)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -144,8 +175,22 @@ struct ThreadListView: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                 }
+                .accessibilityLabel("筛选主题")
             }
         }
+    }
+}
+
+private struct SkeletonThreadRow: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("这是一个用来占位的主题标题，长度大约两行")
+                .font(.callout.weight(.medium))
+            Text("作者 · 回复 · 浏览")
+                .font(.caption)
+        }
+        .redacted(reason: .placeholder)
+        .padding(.vertical, 4)
     }
 }
 

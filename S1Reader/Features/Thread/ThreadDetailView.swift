@@ -189,8 +189,10 @@ final class ThreadDetailViewModel {
 
 struct ThreadDetailView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: ThreadDetailViewModel
-    @State private var viewerImage: ImageReference?
+    @State private var viewerIndex: Int?
+    @State private var threadImageURLs: [URL] = []
     @State private var showComposer = false
     @State private var showLogin = false
     @State private var showPageJump = false
@@ -212,38 +214,19 @@ struct ThreadDetailView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                header
+                ThreadHeaderView(
+                    title: model.title,
+                    author: model.summary.author,
+                    posts: model.totalPosts,
+                    views: model.views
+                )
 
                 if let error = model.errorMessage, model.posts.isEmpty {
-                    ContentUnavailableView {
-                        Label("加载失败", systemImage: "wifi.exclamationmark")
-                    } description: {
-                        Text(error)
-                    } actions: {
-                        Button("重试") { Task { await model.reload() } }
-                            .buttonStyle(.borderedProminent)
-                        if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
-                            Link("在浏览器中打开", destination: webURL)
-                                .buttonStyle(.bordered)
-                        }
-                        if !app.isLoggedIn {
-                            Button("登录") { showLogin = true }
-                                .buttonStyle(.bordered)
-                        }
-                        Button(copiedDiagnostics ? "已复制诊断信息" : "复制诊断信息") {
-                            Task {
-                                let details = await APIClient.shared.diagnostics()
-                                UIPasteboard.general.string = "tid: \(model.summary.tid)\n\(details)"
-                                copiedDiagnostics = true
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .padding(.top, 60)
+                    errorState(error)
                 }
 
                 ForEach(visiblePosts) { post in
-                    PostRowView(post: post, onImageTap: { viewerImage = ImageReference(url: $0) })
+                    PostRowView(post: post, onImageTap: openImage)
                         .id(post.pid)
                         .onAppear {
                             guard post.pid == visiblePosts.last?.pid else { return }
@@ -252,21 +235,9 @@ struct ThreadDetailView: View {
                     Divider()
                 }
 
-                if model.isLoadingMore {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                        Spacer()
-                    }
-                    .padding(.vertical, 20)
-                } else if !model.posts.isEmpty {
-                    Text("第 \(model.loadedPages) / \(model.pageCount) 页 · 已加载 \(model.posts.count) / \(model.totalPosts) 楼")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 20)
-                }
+                listFooter
             }
+            .modifier(ReadableWidth())
             .scrollTargetLayout()
         }
         .scrollPosition(id: $visiblePid, anchor: .top)
@@ -277,10 +248,27 @@ struct ThreadDetailView: View {
             }
         }
         .contentMargins(.bottom, 72, for: .scrollContent)
+        // A single compact button; the extra bottom margin keeps it clear of the
+        // page footer while the thread scrolls under it.
+        .overlay(alignment: .bottomTrailing) {
+            ReplyFloatingButton {
+                if app.isLoggedIn {
+                    showComposer = true
+                } else {
+                    showLogin = true
+                }
+            }
+        }
+        // Reading a thread is a focused task: the reply bar replaces the tabs.
+        .toolbar(.hidden, for: .tabBar)
         .onChange(of: model.focusPid) { _, pid in
             guard let pid else { return }
             didRestorePosition = true
-            withAnimation(.easeInOut(duration: 0.25)) { visiblePid = pid }
+            if reduceMotion {
+                visiblePid = pid
+            } else {
+                withAnimation(.easeInOut(duration: 0.25)) { visiblePid = pid }
+            }
             model.focusPid = nil
         }
         .onChange(of: visiblePid) { _, pid in
@@ -333,7 +321,7 @@ struct ThreadDetailView: View {
             if let raw = ProcessInfo.processInfo.environment["S1_VIEW_IMAGE"],
                let target = URL(string: raw) {
                 try? await Task.sleep(for: .milliseconds(1200))
-                viewerImage = ImageReference(url: target)
+                openImage(target)
             }
             // S1_CLEAR_IMAGES=1 drops this thread's cached pictures so the eviction
             // path can be checked without tapping the menu.
@@ -353,62 +341,62 @@ struct ThreadDetailView: View {
                 ProgressView()
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            Button {
-                if app.isLoggedIn {
-                    showComposer = true
-                } else {
-                    showLogin = true
-                }
-            } label: {
-                Label("回复", systemImage: "arrowshape.turn.up.left.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Color.accentColor, in: Capsule())
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
-            }
-            .padding(.trailing, 18)
-            .padding(.bottom, 26)
-        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                // Favourite is the most frequent action here, so it gets its own
+                // button instead of hiding inside the menu.
+                Button {
+                    toggleFavorite()
+                } label: {
+                    Image(systemName: isFavorite ? "bookmark.fill" : "bookmark")
+                }
+                .accessibilityLabel(isFavorite ? "取消收藏" : "收藏主题")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button {
-                        onlyOriginalPoster.toggle()
-                    } label: {
-                        Label(
-                            onlyOriginalPoster ? "显示全部楼层" : "只看楼主",
-                            systemImage: onlyOriginalPoster ? "person.2" : "person"
-                        )
+                    Section {
+                        Button {
+                            onlyOriginalPoster.toggle()
+                        } label: {
+                            Label(
+                                onlyOriginalPoster ? "显示全部楼层" : "只看楼主",
+                                systemImage: onlyOriginalPoster ? "person.2" : "person"
+                            )
+                        }
                     }
-                    Button {
-                        toggleFavorite()
-                    } label: {
-                        Label(isFavorite ? "取消收藏" : "收藏主题", systemImage: isFavorite ? "bookmark.fill" : "bookmark")
+                    Section {
+                        Button {
+                            showPageJump = true
+                        } label: {
+                            Label("跳到指定页（共 \(model.pageCount) 页）", systemImage: "number")
+                        }
+                        Button {
+                            Task { await model.reload() }
+                        } label: {
+                            Label("刷新", systemImage: "arrow.clockwise")
+                        }
+                        if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
+                            ShareLink(item: webURL) {
+                                Label("分享主题", systemImage: "square.and.arrow.up")
+                            }
+                        }
                     }
-                    Button {
-                        showPageJump = true
-                    } label: {
-                        Label("跳到指定页（共 \(model.pageCount) 页）", systemImage: "number")
+                    Section {
+                        Button(role: .destructive) {
+                            clearThreadImageCache()
+                        } label: {
+                            Label("清除本帖图片缓存（\(threadImageCount) 张）", systemImage: "trash")
+                        }
+                        .disabled(threadImageCount == 0)
                     }
-                    Button {
-                        Task { await model.reload() }
-                    } label: {
-                        Label("刷新", systemImage: "arrow.clockwise")
-                    }
-                    Button {
-                        clearThreadImageCache()
-                    } label: {
-                        Label("清除本帖图片缓存（\(threadImageCount) 张）", systemImage: "trash")
-                    }
-                    .disabled(threadImageCount == 0)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                .accessibilityLabel("更多")
             }
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: isFavorite)
+        .sensoryFeedback(.selection, trigger: onlyOriginalPoster)
         .alert(cacheNotice ?? "", isPresented: Binding(
             get: { cacheNotice != nil },
             set: { if !$0 { cacheNotice = nil } }
@@ -438,8 +426,71 @@ struct ThreadDetailView: View {
         .sheet(isPresented: $showLogin) {
             LoginView()
         }
-        .sheet(item: $viewerImage) { reference in
-            ImageViewer(url: reference.url)
+        .fullScreenCover(isPresented: Binding(
+            get: { viewerIndex != nil },
+            set: { if !$0 { viewerIndex = nil } }
+        )) {
+            ImageBrowser(
+                urls: threadImageURLs,
+                index: Binding(get: { viewerIndex ?? 0 }, set: { viewerIndex = $0 })
+            )
+        }
+    }
+
+    private func errorState(_ error: String) -> some View {
+        ContentUnavailableView {
+            Label("加载失败", systemImage: "wifi.exclamationmark")
+        } description: {
+            Text(error)
+        } actions: {
+            Button("重试") { Task { await model.reload() } }
+                .buttonStyle(.borderedProminent)
+            if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
+                Link("在浏览器中打开", destination: webURL)
+                    .buttonStyle(.bordered)
+            }
+            if !app.isLoggedIn {
+                Button("登录") { showLogin = true }
+                    .buttonStyle(.bordered)
+            }
+            Button(copiedDiagnostics ? "已复制诊断信息" : "复制诊断信息") {
+                Task {
+                    let details = await APIClient.shared.diagnostics()
+                    UIPasteboard.general.string = "tid: \(model.summary.tid)\n\(details)"
+                    copiedDiagnostics = true
+                }
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.top, 60)
+    }
+
+    @ViewBuilder
+    private var listFooter: some View {
+        if model.isLoadingMore {
+            HStack {
+                Spacer()
+                ProgressView()
+                Spacer()
+            }
+            .padding(.vertical, 20)
+        } else if !model.posts.isEmpty {
+            Text("第 \(model.loadedPages) / \(model.pageCount) 页 · 已加载 \(model.posts.count) / \(model.totalPosts) 楼")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+        }
+    }
+
+    /// Opens the viewer on the tapped picture, keeping the thread's order so the
+    /// reader can swipe through the rest.
+    private func openImage(_ url: URL) {
+        if let index = threadImageURLs.firstIndex(of: url) {
+            viewerIndex = index
+        } else {
+            threadImageURLs = [url]
+            viewerIndex = 0
         }
     }
 
@@ -455,6 +506,7 @@ struct ThreadDetailView: View {
                 htmls.flatMap { HTMLParser.imageURLs(in: $0) }
             }.value
             ImageCacheIndex.shared.register(tid: tid, title: title, urls: urls)
+            threadImageURLs = urls
             threadImageCount = ImageCacheIndex.shared.urls(for: tid).count
         }
     }
@@ -511,14 +563,23 @@ struct ThreadDetailView: View {
         return model.posts.filter { $0.author == model.summary.author || $0.isFirst }
     }
 
-    private var header: some View {
+}
+
+/// Thread title block, kept out of the main view so its body stays readable.
+struct ThreadHeaderView: View {
+    let title: String
+    let author: String
+    let posts: Int
+    let views: Int
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(model.title)
+            Text(title)
                 .font(.title3.weight(.semibold))
             HStack(spacing: 12) {
-                Label(model.summary.author, systemImage: "person")
-                Label("\(model.totalPosts) 楼", systemImage: "bubble.left.and.bubble.right")
-                Label(Formatters.compactCount(model.views), systemImage: "eye")
+                Label(author, systemImage: "person")
+                Label("\(posts) 楼", systemImage: "bubble.left.and.bubble.right")
+                Label(Formatters.compactCount(views), systemImage: "eye")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -531,159 +592,22 @@ struct ThreadDetailView: View {
     }
 }
 
-private struct PageJumpSheet: View {
-    let current: Int
-    let total: Int
-    var onJump: (Int) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var text: String
-    @FocusState private var isEditing: Bool
-
-    init(current: Int, total: Int, onJump: @escaping (Int) -> Void) {
-        self.current = current
-        self.total = total
-        self.onJump = onJump
-        _text = State(initialValue: String(current))
-    }
-
-    private var lastPage: Int { max(total, 1) }
-
-    /// Page number typed by the reader, or nil when it is out of range.
-    private var enteredPage: Int? {
-        guard let value = Int(text), value >= 1, value <= lastPage else { return nil }
-        return value
-    }
+/// Floating reply action: one button, no bar.
+struct ReplyFloatingButton: View {
+    var action: () -> Void
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack {
-                        Text("页码")
-                        Spacer()
-                        TextField("1–\(lastPage)", text: $text)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .monospacedDigit()
-                            .focused($isEditing)
-                            .frame(maxWidth: 120)
-                    }
-                    HStack {
-                        Text("共")
-                        Spacer()
-                        Text("\(total) 页")
-                            .foregroundStyle(.secondary)
-                    }
-                } footer: {
-                    Text("输入 1 到 \(lastPage) 之间的页码")
-                }
-                Section {
-                    Button(enteredPage.map { "跳到第 \($0) 页" } ?? "跳转") {
-                        guard let page = enteredPage else { return }
-                        onJump(page)
-                        dismiss()
-                    }
-                    .disabled(enteredPage == nil || enteredPage == current)
-                }
-            }
-            .navigationTitle("跳页")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("收起键盘") { isEditing = false }
-                }
-            }
-            .onChange(of: text) { _, value in
-                let digits = value.filter(\.isNumber)
-                let trimmed = String(digits.prefix(5))
-                if trimmed != value { text = trimmed }
-            }
+        Button(action: action) {
+            Image(systemName: "arrowshape.turn.up.left.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(Color.accentColor, in: Circle())
+                .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
         }
-        .presentationDetents([.height(300)])
-        .task {
-            // Give the sheet time to slide in before taking focus.
-            try? await Task.sleep(for: .milliseconds(350))
-            isEditing = true
-        }
-    }
-}
-
-struct ImageReference: Identifiable {
-    let url: URL
-    var id: String { url.absoluteString }
-}
-
-private struct ImageViewer: View {
-    let url: URL
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var scale: CGFloat = 1
-    @State private var message: String?
-
-    var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
-                ScrollView([.horizontal, .vertical]) {
-                    // Fitting the picture into the viewport height as well as its
-                    // width is what shows the whole image instead of its top
-                    // slice; the trailing frame reserves scroll space when zoomed.
-                    RemoteImage(url: url, contentMode: .fit)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .scaleEffect(scale)
-                        .frame(width: proxy.size.width * scale, height: proxy.size.height * scale)
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .contentShape(Rectangle())
-                .gesture(
-                    MagnifyGesture()
-                        .onChanged { value in
-                            scale = min(max(1, value.magnification), 4)
-                        }
-                        .onEnded { value in
-                            withAnimation(.snappy) {
-                                scale = min(max(1, value.magnification), 4)
-                            }
-                        }
-                )
-                .onTapGesture(count: 2) {
-                    withAnimation(.snappy) { scale = scale > 1 ? 1 : 2.5 }
-                }
-            }
-            .background(Color.black)
-            .alert(message ?? "", isPresented: Binding(
-                get: { message != nil },
-                set: { if !$0 { message = nil } }
-            )) {
-                Button("好", role: .cancel) { message = nil }
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        Task { await save() }
-                    } label: {
-                        Image(systemName: "square.and.arrow.down")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { dismiss() }
-                }
-            }
-            .toolbarBackground(.black, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-        }
-    }
-
-    private func save() async {
-        do {
-            try await ImageSaver.save(url)
-            message = "已保存到相册"
-        } catch {
-            message = error.localizedDescription
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("回复本帖")
+        .padding(.trailing, 18)
+        .padding(.bottom, 18)
     }
 }

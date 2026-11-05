@@ -32,6 +32,9 @@ struct AvatarView: View {
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(Color.primary.opacity(0.06)))
+        // The author's name is always shown next to the avatar, so VoiceOver
+        // would only repeat it.
+        .accessibilityHidden(true)
         .task(id: uid) {
             guard image == nil, let url = AvatarURL.url(uid: uid) else { return }
             if let loaded = await ImageLoader.shared.image(for: url) {

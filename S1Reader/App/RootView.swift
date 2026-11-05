@@ -28,6 +28,7 @@ struct RootView: View {
             .badge(model.member?.unreadNotices ?? 0)
             .tag(1)
         }
+        .modifier(SidebarAdaptableTabs())
         .task {
             await model.loadIfNeeded()
             #if DEBUG

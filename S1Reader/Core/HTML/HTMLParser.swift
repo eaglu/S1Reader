@@ -23,9 +23,54 @@ enum HTMLParser {
         var quoteDepth = 0
     }
 
-    static func parse(_ html: String) -> [PostNode] {
-        var builder = PostBuilder(html: normalize(html))
+    static func parse(_ html: String, scale: CGFloat = 1) -> [PostNode] {
+        var builder = PostBuilder(html: normalize(html), scale: scale)
         return builder.run()
+    }
+
+    /// Multiplier that makes Discuz's absolute font sizes follow Dynamic Type.
+    static func textScale(for size: DynamicTypeSize) -> CGFloat {
+        switch size {
+        case .xSmall: 0.82
+        case .small: 0.88
+        case .medium: 0.94
+        case .large: 1
+        case .xLarge: 1.12
+        case .xxLarge: 1.24
+        case .xxxLarge: 1.35
+        case .accessibility1: 1.65
+        case .accessibility2: 1.94
+        case .accessibility3: 2.35
+        case .accessibility4: 2.76
+        case .accessibility5: 3.12
+        @unknown default: 1
+        }
+    }
+
+    /// Plain text of a post body, used by "复制文字".
+    static func plainText(_ html: String) -> String {
+        var text = ""
+        for node in parse(html) {
+            switch node {
+            case .text(let value), .quote(let value):
+                text += String(value.characters)
+            case .image:
+                continue
+            }
+        }
+        var lines: [String] = []
+        var blankRun = 0
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                blankRun += 1
+                if blankRun > 2 { continue }
+            } else {
+                blankRun = 0
+            }
+            lines.append(trimmed)
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Non-smiley images referenced by a post, used for cache bookkeeping.
@@ -38,11 +83,11 @@ enum HTMLParser {
 
     // MARK: - Text attributes
 
-    fileprivate static func apply(_ style: Style, to string: inout AttributedString) {
+    fileprivate static func apply(_ style: Style, to string: inout AttributedString, scale: CGFloat = 1) {
         if style.quoteDepth > 0 {
             // Quoted text is always smaller and secondary, whatever inline
             // formatting the original author used.
-            var font = Font.system(size: style.size.map { min($0, 14) } ?? 13.5)
+            var font = Font.system(size: style.size.map { min($0, 15) } ?? 15 * scale)
             if style.bold { font = font.bold() }
             if style.italic { font = font.italic() }
             string.font = font
@@ -56,7 +101,7 @@ enum HTMLParser {
             return
         }
         if style.bold || style.italic || style.size != nil {
-            var font = Font.system(size: style.size ?? 17)
+            var font = Font.system(size: (style.size ?? 17) * scale)
             if style.bold { font = font.bold() }
             if style.italic { font = font.italic() }
             string.font = font
@@ -188,6 +233,7 @@ enum HTMLParser {
 /// Tokenizes a Discuz post body and accumulates `PostNode`s.
 private struct PostBuilder {
     private let html: String
+    private let scale: CGFloat
     private var index: String.Index
     private var nodes: [PostNode] = []
     private var text = AttributedString()
@@ -200,8 +246,9 @@ private struct PostBuilder {
     private var divDepth = 0
     private var quoteDivDepths: [Int] = []
 
-    init(html: String) {
+    init(html: String, scale: CGFloat = 1) {
         self.html = html
+        self.scale = scale
         index = html.startIndex
     }
 
@@ -355,13 +402,13 @@ private struct PostBuilder {
                 if atLineStart { continue }
                 if pendingNewlines > 0 { flushPendingNewlines(style) }
                 var space = AttributedString(" ")
-                HTMLParser.apply(style, to: &space)
+                HTMLParser.apply(style, to: &space, scale: scale)
                 emit(space)
                 continue
             }
             if pendingNewlines > 0 { flushPendingNewlines(style) }
             var chunk = AttributedString(String(character))
-            HTMLParser.apply(style, to: &chunk)
+            HTMLParser.apply(style, to: &chunk, scale: scale)
             emit(chunk)
             atLineStart = false
         }
@@ -370,7 +417,7 @@ private struct PostBuilder {
     private mutating func flushPendingNewlines(_ style: HTMLParser.Style) {
         let count = min(pendingNewlines, 2)
         var newlines = AttributedString(String(repeating: "\n", count: count))
-        HTMLParser.apply(style, to: &newlines)
+        HTMLParser.apply(style, to: &newlines, scale: scale)
         emit(newlines)
         pendingNewlines = 0
     }

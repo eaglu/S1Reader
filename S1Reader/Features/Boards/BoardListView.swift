@@ -2,6 +2,34 @@ import SwiftUI
 
 struct BoardListView: View {
     @Environment(AppModel.self) private var model
+    @State private var query = Self.initialQuery
+
+    /// Debug hook so the search field can be filled from the command line.
+    private static var initialQuery: String {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["S1_SEARCH"] ?? ""
+        #else
+        ""
+        #endif
+    }
+
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Filtered in place so the section headers keep their order.
+    private var filteredSections: [(title: String, forums: [Forum])] {
+        guard !trimmedQuery.isEmpty else {
+            return model.sections.map { ($0.title, $0.forums) }
+        }
+        return model.sections.compactMap { section in
+            let forums = section.forums.filter {
+                $0.name.localizedStandardContains(trimmedQuery)
+                    || $0.description.localizedStandardContains(trimmedQuery)
+            }
+            return forums.isEmpty ? nil : (section.title, forums)
+        }
+    }
 
     var body: some View {
         List {
@@ -20,7 +48,19 @@ struct BoardListView: View {
                 }
             }
 
-            ForEach(model.sections) { section in
+            if model.isLoading && model.forums.isEmpty {
+                Section {
+                    ForEach(0..<6, id: \.self) { _ in
+                        SkeletonBoardRow()
+                    }
+                }
+            } else if !trimmedQuery.isEmpty && filteredSections.isEmpty {
+                Section {
+                    ContentUnavailableView.search(text: trimmedQuery)
+                }
+            }
+
+            ForEach(Array(filteredSections.enumerated()), id: \.offset) { _, section in
                 Section {
                     ForEach(section.forums) { forum in
                         NavigationLink(value: forum) {
@@ -34,12 +74,8 @@ struct BoardListView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Stage1st")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索版块")
         .refreshable { await model.reload() }
-        .overlay {
-            if model.isLoading && model.forums.isEmpty {
-                ProgressView("正在连接 S1…")
-            }
-        }
     }
 }
 
@@ -86,6 +122,22 @@ private struct ForumRow: View {
                 .padding(.top, 2)
             }
         }
+        .padding(.vertical, 4)
+    }
+}
+
+/// Placeholder rows so the first load looks like content instead of a spinner.
+private struct SkeletonBoardRow: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("版块名称")
+                .font(.headline)
+            Text("这里是一段版块简介，用来占位。")
+                .font(.subheadline)
+            Text("主题 1.2 万 · 帖数 3.4 万")
+                .font(.caption)
+        }
+        .redacted(reason: .placeholder)
         .padding(.vertical, 4)
     }
 }

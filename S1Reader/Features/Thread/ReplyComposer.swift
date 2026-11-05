@@ -9,6 +9,8 @@ struct ReplyComposer: View {
     @State private var isSending = false
     @State private var errorMessage: String?
     @FocusState private var focused: Bool
+    @State private var sentCount = 0
+    @State private var failedCount = 0
 
     var body: some View {
         NavigationStack {
@@ -16,6 +18,7 @@ struct ReplyComposer: View {
                 TextEditor(text: $text)
                     .focused($focused)
                     .font(.body)
+                    .accessibilityLabel("回复内容")
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .scrollContentBackground(.hidden)
@@ -59,6 +62,8 @@ struct ReplyComposer: View {
                 }
             }
             .onAppear { focused = true }
+            .sensoryFeedback(.success, trigger: sentCount)
+            .sensoryFeedback(.error, trigger: failedCount)
         }
     }
 
@@ -68,8 +73,10 @@ struct ReplyComposer: View {
         defer { isSending = false }
         do {
             try await onSend(text)
+            sentCount += 1
             dismiss()
         } catch {
+            failedCount += 1
             errorMessage = error.localizedDescription
         }
     }

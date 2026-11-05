@@ -6,6 +6,7 @@ struct PostRowView: View {
     var onImageTap: (URL) -> Void = { _ in }
 
     @State private var nodes: [PostNode] = []
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -15,16 +16,44 @@ struct PostRowView: View {
                     .redacted(reason: .placeholder)
             } else {
                 PostContentView(nodes: nodes, onImageTap: onImageTap)
+                    .contextMenu { menu }
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: post.pid) {
+        // Re-parse when the reader changes the system text size so the body
+        // follows Dynamic Type instead of staying at Discuz's fixed sizes.
+        .task(id: "\(post.pid)-\(dynamicTypeSize)") {
             let html = post.message
+            let scale = HTMLParser.textScale(for: dynamicTypeSize)
             nodes = await Task.detached(priority: .userInitiated) {
-                HTMLParser.parse(html)
+                HTMLParser.parse(html, scale: scale)
             }.value
+        }
+    }
+
+    /// Floor link, shareable from the context menu.
+    private var floorURL: URL? {
+        URL(string: "https://stage1st.com/2b/forum.php?mod=redirect&goto=findpost&ptid=\(post.tid)&pid=\(post.pid)")
+    }
+
+    @ViewBuilder
+    private var menu: some View {
+        Button {
+            UIPasteboard.general.string = HTMLParser.plainText(post.message)
+        } label: {
+            Label("复制文字", systemImage: "doc.on.doc")
+        }
+        if let floorURL {
+            Button {
+                UIPasteboard.general.url = floorURL
+            } label: {
+                Label("复制链接", systemImage: "link")
+            }
+            ShareLink(item: floorURL) {
+                Label("分享本楼", systemImage: "square.and.arrow.up")
+            }
         }
     }
 
@@ -65,6 +94,7 @@ struct PostContentView: View {
     @State private var smileys: [URL: UIImage] = [:]
     @State private var saveMessage: String?
     @State private var needsPhotoPermission = false
+    @State private var savedSuccessfully = 0
 
     private enum Block {
         case text(Text)
@@ -121,7 +151,7 @@ struct PostContentView: View {
                         .padding(.leading, 12)
                         .padding(.trailing, 10)
                         .background(
-                            Color.secondary.opacity(0.07),
+                            Color(uiColor: .tertiarySystemFill),
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
                         .overlay(alignment: .leading) {
@@ -138,11 +168,16 @@ struct PostContentView: View {
                             .frame(maxWidth: .infinity, maxHeight: 460)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("帖子图片")
+                    .accessibilityHint("双击查看大图")
                     .contextMenu {
                         Button {
                             save(url)
                         } label: {
                             Label("保存到相册", systemImage: "square.and.arrow.down")
+                        }
+                        ShareLink(item: url) {
+                            Label("分享图片", systemImage: "square.and.arrow.up")
                         }
                     }
                 }
@@ -154,6 +189,7 @@ struct PostContentView: View {
         )) {
             Button("好", role: .cancel) { saveMessage = nil }
         }
+        .sensoryFeedback(.success, trigger: savedSuccessfully)
         .task(id: nodes) {
             let urls = nodes.compactMap { node -> URL? in
                 if case .image(let url, let isSmiley) = node, isSmiley { return url }
@@ -172,6 +208,7 @@ struct PostContentView: View {
             do {
                 try await ImageSaver.save(url)
                 needsPhotoPermission = false
+                savedSuccessfully += 1
                 saveMessage = "已保存到相册"
             } catch {
                 needsPhotoPermission = (error as? ImageSaveError) == .denied
