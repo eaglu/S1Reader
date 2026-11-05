@@ -114,9 +114,13 @@ actor ImageLoader {
 struct RemoteImage: View {
     let url: URL
     var contentMode: ContentMode = .fit
+    /// Lets a caller that already knows the picture is on screen start at once
+    /// (the full-screen viewer), instead of waiting for the scroll signal.
+    var startsLoadingImmediately = false
 
     @State private var image: UIImage?
     @State private var didFail = false
+    @State private var isOnScreen = false
 
     var body: some View {
         Group {
@@ -136,8 +140,34 @@ struct RemoteImage: View {
                     .overlay(ProgressView())
             }
         }
-        .task(id: url) {
-            if image != nil { return }
+        .visibleInScroll { visible in
+            isOnScreen = visible
+            if visible { load() }
+        }
+        .onChange(of: url) {
+            image = nil
+            didFail = false
+            load()
+        }
+        .onAppear {
+            if startsLoadingImmediately { load() }
+        }
+    }
+
+    /// Fetches only once the picture is actually on screen; pictures that were
+    /// merely built ahead of the viewport stay as placeholders until scrolled to.
+    private func load() {
+        guard image == nil, !didFail else { return }
+        guard isOnScreen || startsLoadingImmediately else {
+            #if DEBUG
+            print("S1 image deferred \(url.lastPathComponent)")
+            #endif
+            return
+        }
+        #if DEBUG
+        print("S1 image start \(url.lastPathComponent)")
+        #endif
+        Task {
             let loaded = await ImageLoader.shared.image(for: url)
             if loaded == nil { didFail = true } else { image = loaded }
         }

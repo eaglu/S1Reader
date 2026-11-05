@@ -106,7 +106,7 @@ private struct ZoomableImage: View {
                 // Fitting the picture into the viewport height as well as its
                 // width is what shows the whole image instead of its top
                 // slice; the trailing frame reserves scroll space when zoomed.
-                RemoteImage(url: url, contentMode: .fit)
+                RemoteImage(url: url, contentMode: .fit, startsLoadingImmediately: true)
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .scaleEffect(scale)
                     .frame(width: proxy.size.width * scale, height: proxy.size.height * scale)
