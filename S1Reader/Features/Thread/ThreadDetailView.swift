@@ -16,6 +16,8 @@ final class ThreadDetailViewModel {
     var isLoadingMore = false
     var errorMessage: String?
     var loadedPages = 0
+    /// Lowest page currently in `posts`; above 1 the list can still scroll up.
+    var firstLoadedPage = 1
     /// Set right after a successful reply so the list can scroll to the new post.
     var focusPid: String?
     /// Post to scroll to when reopening a thread that was read before.
@@ -36,6 +38,17 @@ final class ThreadDetailViewModel {
     }
 
     var hasLoadedOnce: Bool { didLoad }
+
+    /// True when the reader is sitting on the first page of a jump (say page 400
+    /// of 400) and the replies above have not been fetched yet.
+    var hasEarlier: Bool { firstLoadedPage > 1 && !posts.isEmpty }
+
+    /// Page range currently loaded, e.g. "第 399–400 / 400 页".
+    var loadedPageRange: String {
+        firstLoadedPage == loadedPages
+            ? "第 \(loadedPages) / \(pageCount) 页"
+            : "第 \(firstLoadedPage)–\(loadedPages) / \(pageCount) 页"
+    }
 
     /// S1 answers some threads with a bare Discuz "System Error" (HTTP 503) only when
     /// a session cookie is attached. A 5xx is retried once as a guest, and the thread
@@ -109,6 +122,7 @@ final class ThreadDetailViewModel {
                 views = info.views
             }
             loadedPages = 1
+            firstLoadedPage = 1
             hasMore = posts.count < totalPosts
             didLoad = true
             ThreadVisitStore.shared.markSeen(tid: summary.tid, replies: max(0, totalPosts - 1))
@@ -147,6 +161,7 @@ final class ThreadDetailViewModel {
                 views = info.views
             }
             loadedPages = clamped
+            firstLoadedPage = clamped
             hasMore = clamped < pageCount && !result.posts.isEmpty
             didLoad = true
         } catch {
@@ -183,6 +198,38 @@ final class ThreadDetailViewModel {
         } catch {
             errorMessage = error.localizedDescription
             hasMore = false
+        }
+    }
+
+    /// Fetches the page above the one that is loaded and puts it in front of the
+    /// list. Returns the post that was on top so the reader keeps their place.
+    @discardableResult
+    func loadEarlier() async -> String? {
+        guard hasEarlier, !isLoading, !isLoadingMore else { return nil }
+        let target = firstLoadedPage - 1
+        let anchor = posts.first?.pid
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+
+        do {
+            let result = try await fetchPage(target)
+            let existing = Set(posts.map(\.pid))
+            let older = result.posts.filter { !existing.contains($0.pid) }
+            if !older.isEmpty {
+                posts.insert(contentsOf: older, at: 0)
+            }
+            firstLoadedPage = target
+            if let info = result.thread {
+                totalPosts = info.replies + 1
+            }
+            hasMore = posts.count < totalPosts
+            #if DEBUG
+            print("S1 loadEarlier page=\(target) added=\(older.count) range=\(loadedPageRange) posts=\(posts.count) anchor=\(anchor ?? "-")")
+            #endif
+            return older.isEmpty ? nil : anchor
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
         }
     }
 }
@@ -225,6 +272,8 @@ struct ThreadDetailView: View {
                     errorState(error)
                 }
 
+                earlierRow
+
                 ForEach(visiblePosts) { post in
                     PostRowView(post: post, onImageTap: openImage)
                         .id(post.pid)
@@ -241,6 +290,9 @@ struct ThreadDetailView: View {
             .scrollTargetLayout()
         }
         .scrollPosition(id: $visiblePid, anchor: .top)
+        .modifier(LoadEarlierOnOverscroll(isEnabled: model.hasEarlier) {
+            Task { await loadEarlierKeepingPlace() }
+        })
         .opacity(isRestoringPosition ? 0 : 1)
         .overlay {
             if isRestoringPosition {
@@ -307,6 +359,23 @@ struct ThreadDetailView: View {
                 for _ in 0..<max(0, times) {
                     try? await Task.sleep(for: .milliseconds(500))
                     await model.loadMore()
+                }
+            }
+            // S1_JUMP_PAGE=<n> then S1_LOAD_EARLIER=<n> exercise jumping to a late
+            // page and loading the replies above it.
+            if let raw = ProcessInfo.processInfo.environment["S1_JUMP_PAGE"], let page = Int(raw) {
+                await model.loadPage(page)
+                didRestorePosition = true
+                // S1_TOP_ROW=1 parks the list one post down so the "load earlier"
+                // row above the first post is on screen for a screenshot.
+                let offset = ProcessInfo.processInfo.environment["S1_TOP_ROW"] == "1" ? 1 : 0
+                visiblePid = model.posts.dropFirst(offset).first?.pid
+                try? await Task.sleep(for: .milliseconds(600))
+            }
+            if let raw = ProcessInfo.processInfo.environment["S1_LOAD_EARLIER"], let times = Int(raw) {
+                for _ in 0..<max(0, times) {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    await loadEarlierKeepingPlace()
                 }
             }
             // S1_JUMP_SHEET=1 opens the page picker so its input field can be checked.
@@ -475,7 +544,7 @@ struct ThreadDetailView: View {
             }
             .padding(.vertical, 20)
         } else if !model.posts.isEmpty {
-            Text("第 \(model.loadedPages) / \(model.pageCount) 页 · 已加载 \(model.posts.count) / \(model.totalPosts) 楼")
+            Text("\(model.loadedPageRange) · 已加载 \(model.posts.count) / \(model.totalPosts) 楼")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
@@ -558,11 +627,77 @@ struct ThreadDetailView: View {
         }
     }
 
+    /// Row above the first loaded post: pulls in the page before the jump when
+    /// the reader scrolls up. Pulling past the top triggers the same thing on
+    /// iOS 18+, where scroll offsets can be observed.
+    @ViewBuilder
+    private var earlierRow: some View {
+        if model.hasEarlier {
+            HStack(spacing: 8) {
+                if model.isLoadingMore {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.up.circle")
+                }
+                Text(model.isLoadingMore
+                     ? "正在加载第 \(model.firstLoadedPage - 1) 页…"
+                     : "加载更早的回复（第 \(model.firstLoadedPage - 1) 页）")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                Task { await loadEarlierKeepingPlace() }
+            }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("载入上一页的回复")
+            Divider()
+        }
+    }
+
+    /// Loads the previous page and scrolls back to the post that was on top, so
+    /// prepending content does not shove the reader's place down the screen.
+    private func loadEarlierKeepingPlace() async {
+        guard !model.isLoadingMore else { return }
+        let topBefore = visiblePid
+        guard let anchor = await model.loadEarlier() else {
+            return
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            visiblePid = anchor
+        }
+    }
+
     private var visiblePosts: [Post] {
         guard onlyOriginalPoster else { return model.posts }
         return model.posts.filter { $0.author == model.summary.author || $0.isFirst }
     }
 
+}
+
+/// Watches the scroll offset so pulling up at the top of a jumped-to page loads
+/// the replies above it. Offsets are only observable from iOS 18 on; older
+/// versions keep the explicit row in the list.
+private struct LoadEarlierOnOverscroll: ViewModifier {
+    let isEnabled: Bool
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y
+            } action: { _, offset in
+                guard isEnabled, offset < -55 else { return }
+                action()
+            }
+        } else {
+            content
+        }
+    }
 }
 
 /// Thread title block, kept out of the main view so its body stays readable.
