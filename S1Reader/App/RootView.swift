@@ -3,19 +3,31 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
-    @State private var path = NavigationPath()
+    @State private var path: [Route] = []
     @State private var accountPath = NavigationPath()
     @State private var tab = 0
+
+    /// Threads hide the tab bar, the forum list above them keeps it. The state is
+    /// read from the path rather than from the pushed screen, because a screen's
+    /// own toolbar is only torn down after the pop animation, which left the list
+    /// visible without its bar for a beat.
+    private var hidesTabBar: Bool {
+        if case .thread = path.last { return true }
+        return false
+    }
 
     var body: some View {
         TabView(selection: $tab) {
             NavigationStack(path: $path) {
                 BoardListView()
-                    .navigationDestination(for: Forum.self) { forum in
-                        ThreadListView(forum: forum)
-                    }
-                    .navigationDestination(for: ThreadSummary.self) { thread in
-                        ThreadDetailView(summary: thread)
+                    .toolbar(hidesTabBar ? .hidden : .visible, for: .tabBar)
+                    .navigationDestination(for: Route.self) { route in
+                        switch route {
+                        case .forum(let forum):
+                            ThreadListView(forum: forum)
+                        case .thread(let summary):
+                            ThreadDetailView(summary: summary)
+                        }
                     }
             }
             .tabItem { Label("论坛", systemImage: "list.bullet.rectangle") }
@@ -49,37 +61,49 @@ struct RootView: View {
             tab = 1
         }
         guard let target = ProcessInfo.processInfo.environment["S1_OPEN"] else { return }
-        switch target {
-        case "notices":
-            tab = 1
-            accountPath.append(AccountRoute.notices)
-            return
-        case "favorites":
-            tab = 1
-            accountPath.append(AccountRoute.favorites)
-            return
-        case "images":
-            tab = 1
-            accountPath.append(AccountRoute.imageCache)
-            return
-        default:
-            break
-        }
+        if openDebugAccountTarget(target) { return }
+
         let parts = target.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return }
 
         switch parts[0] {
         case "forum":
             if let forum = model.forums.first(where: { $0.fid == parts[1] }) {
-                path.append(forum)
+                path.append(.forum(forum))
             }
         case "thread":
-            path.append(ThreadSummary(tid: parts[1], subject: "加载中…"))
+            path.append(.thread(ThreadSummary(tid: parts[1], subject: "加载中…")))
         default:
             break
         }
     }
+
+    private func openDebugAccountTarget(_ target: String) -> Bool {
+        switch target {
+        case "notices":
+            tab = 1
+            accountPath.append(AccountRoute.notices)
+            return true
+        case "favorites":
+            tab = 1
+            accountPath.append(AccountRoute.favorites)
+            return true
+        case "images":
+            tab = 1
+            accountPath.append(AccountRoute.imageCache)
+            return true
+        default:
+            return false
+        }
+    }
     #endif
+}
+
+/// What can be pushed onto the forum tab. Keeping the path typed (instead of
+/// `NavigationPath`) lets the root see which screen is on top.
+enum Route: Hashable {
+    case forum(Forum)
+    case thread(ThreadSummary)
 }
 
 #Preview {

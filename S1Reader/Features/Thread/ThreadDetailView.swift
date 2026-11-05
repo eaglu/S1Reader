@@ -236,6 +236,7 @@ final class ThreadDetailViewModel {
 
 struct ThreadDetailView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: ThreadDetailViewModel
     @State private var viewerIndex: Int?
@@ -252,7 +253,6 @@ struct ThreadDetailView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var threadImageCount = 0
     @State private var cacheNotice: String?
-    @State private var copiedDiagnostics = false
 
     init(summary: ThreadSummary) {
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
@@ -269,7 +269,13 @@ struct ThreadDetailView: View {
                 )
 
                 if let error = model.errorMessage, model.posts.isEmpty {
-                    errorState(error)
+                    ThreadErrorState(
+                        message: error,
+                        tid: model.summary.tid,
+                        isLoggedIn: app.isLoggedIn,
+                        onRetry: { Task { await model.reload() } },
+                        onLogin: { showLogin = true }
+                    )
                 }
 
                 earlierRow
@@ -284,7 +290,13 @@ struct ThreadDetailView: View {
                     Divider()
                 }
 
-                listFooter
+                ThreadListFooter(
+                    isLoadingMore: model.isLoadingMore,
+                    hasPosts: !model.posts.isEmpty,
+                    range: model.loadedPageRange,
+                    loaded: model.posts.count,
+                    total: model.totalPosts
+                )
             }
             .modifier(ReadableWidth())
             .scrollTargetLayout()
@@ -311,8 +323,6 @@ struct ThreadDetailView: View {
                 }
             }
         }
-        // Reading a thread is a focused task: the reply bar replaces the tabs.
-        .toolbar(.hidden, for: .tabBar)
         .onChange(of: model.focusPid) { _, pid in
             guard let pid else { return }
             didRestorePosition = true
@@ -391,6 +401,11 @@ struct ThreadDetailView: View {
                let target = URL(string: raw) {
                 try? await Task.sleep(for: .milliseconds(1200))
                 openImage(target)
+            }
+            // S1_POP=1 pops back to the list so the tab bar's return can be filmed.
+            if ProcessInfo.processInfo.environment["S1_POP"] == "1" {
+                try? await Task.sleep(for: .milliseconds(2500))
+                dismiss()
             }
             // S1_CLEAR_IMAGES=1 drops this thread's cached pictures so the eviction
             // path can be checked without tapping the menu.
@@ -506,50 +521,106 @@ struct ThreadDetailView: View {
         }
     }
 
-    private func errorState(_ error: String) -> some View {
-        ContentUnavailableView {
-            Label("加载失败", systemImage: "wifi.exclamationmark")
-        } description: {
-            Text(error)
-        } actions: {
-            Button("重试") { Task { await model.reload() } }
-                .buttonStyle(.borderedProminent)
-            if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
-                Link("在浏览器中打开", destination: webURL)
-                    .buttonStyle(.bordered)
+
+}
+
+/// Thread title block, kept out of the main view so its body stays readable.
+struct ThreadHeaderView: View {
+    let title: String
+    let author: String
+    let posts: Int
+    let views: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+            HStack(spacing: 12) {
+                Label(author, systemImage: "person")
+                Label("\(posts) 楼", systemImage: "bubble.left.and.bubble.right")
+                Label(Formatters.compactCount(views), systemImage: "eye")
             }
-            if !app.isLoggedIn {
-                Button("登录") { showLogin = true }
-                    .buttonStyle(.bordered)
-            }
-            Button(copiedDiagnostics ? "已复制诊断信息" : "复制诊断信息") {
-                Task {
-                    let details = await APIClient.shared.diagnostics()
-                    UIPasteboard.general.string = "tid: \(model.summary.tid)\n\(details)"
-                    copiedDiagnostics = true
-                }
-            }
-            .buttonStyle(.bordered)
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
-        .padding(.top, 60)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
+/// Floating reply action: one button, no bar. On iOS 26 and later it is a real
+/// Liquid Glass button, so it picks up the same material as the system chrome
+/// instead of a hand-drawn circle.
+struct ReplyFloatingButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            Button(action: action) {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 52, height: 52)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .tint(Color.accentColor)
+            .accessibilityLabel("回复本帖")
+            .padding(.trailing, 18)
+            .padding(.bottom, 18)
+        } else {
+            Button(action: action) {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Color.accentColor, in: Circle())
+                    .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("回复本帖")
+            .padding(.trailing, 18)
+            .padding(.bottom, 18)
+        }
+    }
+}
+
+// Helpers live in an extension so the view body stays inside the length the
+// lint rules allow; same file, so `private` state is still reachable.
+extension ThreadDetailView {
+    @ViewBuilder
+    private var earlierRow: some View {
+        if model.hasEarlier {
+            EarlierRepliesRow(
+                isLoading: model.isLoadingMore,
+                page: model.firstLoadedPage - 1
+            ) {
+                Task { await loadEarlierKeepingPlace() }
+            }
+            Divider()
+        }
     }
 
-    @ViewBuilder
-    private var listFooter: some View {
-        if model.isLoadingMore {
-            HStack {
-                Spacer()
-                ProgressView()
-                Spacer()
-            }
-            .padding(.vertical, 20)
-        } else if !model.posts.isEmpty {
-            Text("\(model.loadedPageRange) · 已加载 \(model.posts.count) / \(model.totalPosts) 楼")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
+    /// Loads the previous page and scrolls back to the post that was on top, so
+    /// prepending content does not shove the reader's place down the screen.
+    private func loadEarlierKeepingPlace() async {
+        guard !model.isLoadingMore else { return }
+        let topBefore = visiblePid
+        guard let anchor = await model.loadEarlier() else {
+            return
         }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            visiblePid = anchor
+        }
+    }
+
+    private var visiblePosts: [Post] {
+        guard onlyOriginalPoster else { return model.posts }
+        return model.posts.filter { $0.author == model.summary.author || $0.isFirst }
     }
 
     /// Opens the viewer on the tapped picture, keeping the thread's order so the
@@ -624,141 +695,6 @@ struct ThreadDetailView: View {
             } catch {
                 favoriteError = error.localizedDescription
             }
-        }
-    }
-
-    /// Row above the first loaded post: pulls in the page before the jump when
-    /// the reader scrolls up. Pulling past the top triggers the same thing on
-    /// iOS 18+, where scroll offsets can be observed.
-    @ViewBuilder
-    private var earlierRow: some View {
-        if model.hasEarlier {
-            HStack(spacing: 8) {
-                if model.isLoadingMore {
-                    ProgressView()
-                } else {
-                    Image(systemName: "arrow.up.circle")
-                }
-                Text(model.isLoadingMore
-                     ? "正在加载第 \(model.firstLoadedPage - 1) 页…"
-                     : "加载更早的回复（第 \(model.firstLoadedPage - 1) 页）")
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                Task { await loadEarlierKeepingPlace() }
-            }
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint("载入上一页的回复")
-            Divider()
-        }
-    }
-
-    /// Loads the previous page and scrolls back to the post that was on top, so
-    /// prepending content does not shove the reader's place down the screen.
-    private func loadEarlierKeepingPlace() async {
-        guard !model.isLoadingMore else { return }
-        let topBefore = visiblePid
-        guard let anchor = await model.loadEarlier() else {
-            return
-        }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            visiblePid = anchor
-        }
-    }
-
-    private var visiblePosts: [Post] {
-        guard onlyOriginalPoster else { return model.posts }
-        return model.posts.filter { $0.author == model.summary.author || $0.isFirst }
-    }
-
-}
-
-/// Watches the scroll offset so pulling up at the top of a jumped-to page loads
-/// the replies above it. Offsets are only observable from iOS 18 on; older
-/// versions keep the explicit row in the list.
-private struct LoadEarlierOnOverscroll: ViewModifier {
-    let isEnabled: Bool
-    let action: () -> Void
-
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
-            content.onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.y
-            } action: { _, offset in
-                guard isEnabled, offset < -55 else { return }
-                action()
-            }
-        } else {
-            content
-        }
-    }
-}
-
-/// Thread title block, kept out of the main view so its body stays readable.
-struct ThreadHeaderView: View {
-    let title: String
-    let author: String
-    let posts: Int
-    let views: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.title3.weight(.semibold))
-            HStack(spacing: 12) {
-                Label(author, systemImage: "person")
-                Label("\(posts) 楼", systemImage: "bubble.left.and.bubble.right")
-                Label(Formatters.compactCount(views), systemImage: "eye")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(Color(.secondarySystemGroupedBackground))
-        .overlay(alignment: .bottom) { Divider() }
-    }
-}
-
-/// Floating reply action: one button, no bar. On iOS 26 and later it is a real
-/// Liquid Glass button, so it picks up the same material as the system chrome
-/// instead of a hand-drawn circle.
-struct ReplyFloatingButton: View {
-    var action: () -> Void
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            Button(action: action) {
-                Image(systemName: "arrowshape.turn.up.left.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .frame(width: 52, height: 52)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .tint(Color.accentColor)
-            .accessibilityLabel("回复本帖")
-            .padding(.trailing, 18)
-            .padding(.bottom, 18)
-        } else {
-            Button(action: action) {
-                Image(systemName: "arrowshape.turn.up.left.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(Color.accentColor, in: Circle())
-                    .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("回复本帖")
-            .padding(.trailing, 18)
-            .padding(.bottom, 18)
         }
     }
 }
