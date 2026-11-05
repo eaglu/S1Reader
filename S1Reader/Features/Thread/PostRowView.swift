@@ -34,11 +34,11 @@ struct PostRowView: View {
         // Re-parse when the reader changes the system text size so the body
         // follows Dynamic Type instead of staying at Discuz's fixed sizes.
         .task(id: "\(post.pid)-\(dynamicTypeSize)") {
-            let html = post.message
-            let scale = HTMLParser.textScale(for: dynamicTypeSize)
-            nodes = await Task.detached(priority: .userInitiated) {
-                HTMLParser.parse(html, scale: scale)
-            }.value
+            nodes = await PostBodyCache.shared.nodes(
+                pid: post.pid,
+                html: post.message,
+                scale: HTMLParser.textScale(for: dynamicTypeSize)
+            )
         }
     }
 

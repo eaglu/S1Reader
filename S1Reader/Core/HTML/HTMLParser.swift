@@ -84,11 +84,40 @@ enum HTMLParser {
     }
 
     /// Non-smiley images referenced by a post, used for cache bookkeeping.
+    /// Pulls the post images out of the markup without parsing it.
+    ///
+    /// The full parser builds attributed strings and tracks styles; for a thread
+    /// worth of posts that is a lot of work to answer "which images".
     static func imageURLs(in html: String) -> [URL] {
-        parse(html).compactMap { node in
-            if case .image(let url, let isSmiley) = node, !isSmiley { return url }
-            return nil
+        guard html.contains("<img") else { return [] }
+        var urls: [URL] = []
+        var seen = Set<String>()
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        for match in imgTagRegex.matches(in: html, range: range) {
+            guard let tagRange = Range(match.range, in: html) else { continue }
+            let tag = html[tagRange]
+            guard let src = attribute("src", in: tag) else { continue }
+            let urlString = decodeEntities(src)
+            if urlString.contains("/smiley/") || urlString.contains("/smilies/") { continue }
+            guard let url = URL(string: urlString), seen.insert(url.absoluteString).inserted else { continue }
+            urls.append(url)
         }
+        return urls
+    }
+
+    /// Compiled once: building an `NSRegularExpression` per image tag dominated
+    /// the first scan of a page.
+    private static let imgTagRegex = try! NSRegularExpression(pattern: "<img[^>]*>", options: [.caseInsensitive])
+
+    private static func attribute(_ name: String, in tag: Substring) -> String? {
+        var rest = tag[tag.startIndex...]
+        guard let nameRange = rest.range(of: name, options: [.caseInsensitive]) else { return nil }
+        rest = rest[nameRange.upperBound...]
+        guard let quoteStart = rest.firstIndex(where: { $0 == "\"" || $0 == "'" }) else { return nil }
+        let quote = rest[quoteStart]
+        let afterQuote = rest[rest.index(after: quoteStart)...]
+        guard let end = afterQuote.firstIndex(of: quote) else { return nil }
+        return String(afterQuote[..<end])
     }
 
     // MARK: - Text attributes

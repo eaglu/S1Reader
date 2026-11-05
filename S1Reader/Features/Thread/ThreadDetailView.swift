@@ -305,6 +305,7 @@ struct ThreadDetailView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var mainDynamicTypeSize
     @State private var model: ThreadDetailViewModel
     @State private var viewerIndex: Int?
     /// Which picture the reader tapped, so the viewer can grow out of it.
@@ -356,6 +357,8 @@ struct ThreadDetailView: View {
         return 1
     }
     @State private var threadImageCount = 0
+    /// Posts already scanned for images, so appending a page doesn't rescan everything.
+    @State private var scannedPostPids: Set<String> = []
 
     init(summary: ThreadSummary) {
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
@@ -377,6 +380,7 @@ struct ThreadDetailView: View {
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.posts.count) {
+            await PostBodyCache.shared.warm(posts: model.posts, scale: HTMLParser.textScale(for: mainDynamicTypeSize))
             registerThreadImages()
         }
         .task {
@@ -401,6 +405,7 @@ struct ThreadDetailView: View {
             // from the command line (the simulator cannot be tapped).
             // S1_LOADMORE=<n> appends n pages so pagination can be checked.
             if let raw = ProcessInfo.processInfo.environment["S1_LOADMORE"], let times = Int(raw) {
+                let perfLogging = ProcessInfo.processInfo.environment["S1_PERF"] != nil
                 for _ in 0..<max(0, times) {
                     try? await Task.sleep(for: .milliseconds(500))
                     await model.loadMore()
@@ -412,6 +417,7 @@ struct ThreadDetailView: View {
                         visiblePid = first.pid
                     }
                 }
+                if perfLogging { PostBodyCache.shared.reportAndReset("after-loadmore") }
             }
             // S1_JUMP_PAGE=<n> then S1_LOAD_EARLIER=<n> exercise jumping to a late
             // page and loading the replies above it.
@@ -484,7 +490,9 @@ struct ThreadDetailView: View {
             if ProcessInfo.processInfo.environment["S1_CHECK_NEW"] == "1" {
                 try? await Task.sleep(for: .milliseconds(1500))
                 let added = await model.refreshNewReplies()
-                print("S1_CHECK_NEW added=\(added.map(String.init) ?? "nil") message=\(model.lastCheckMessage ?? "-")")
+                let addedText: String = added.map { String($0) } ?? "nil"
+                let messageText: String = model.lastCheckMessage ?? "-"
+                print("S1_CHECK_NEW added=" + addedText + " message=" + messageText)
             }
             // S1_POP=1 pops back to the list so the tab bar's return can be filmed.
             if ProcessInfo.processInfo.environment["S1_POP"] == "1" {
@@ -523,46 +531,8 @@ struct ThreadDetailView: View {
                 .accessibilityLabel(isFavorite ? "取消收藏" : "收藏主题")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Section {
-                        Button {
-                            onlyOriginalPoster.toggle()
-                        } label: {
-                            Label(
-                                onlyOriginalPoster ? "显示全部楼层" : "只看楼主",
-                                systemImage: onlyOriginalPoster ? "person.2" : "person"
-                            )
-                        }
-                    }
-                    Section {
-                        Button {
-                            showPageJump = true
-                        } label: {
-                            Label("跳到指定页（共 \(model.pageCount) 页）", systemImage: "number")
-                        }
-                        Button {
-                            Task { await model.reload() }
-                        } label: {
-                            Label("刷新", systemImage: "arrow.clockwise")
-                        }
-                        if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
-                            ShareLink(item: webURL) {
-                                Label("分享主题", systemImage: "square.and.arrow.up")
-                            }
-                        }
-                    }
-                    Section {
-                        Button(role: .destructive) {
-                            clearThreadImageCache()
-                        } label: {
-                            Label("清除本帖图片缓存（\(threadImageCount) 张）", systemImage: "trash")
-                        }
-                        .disabled(threadImageCount == 0)
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("更多")
+                moreMenu
+
             }
         }
         .sensoryFeedback(.impact(weight: .light), trigger: isFavorite)
@@ -599,6 +569,52 @@ struct ThreadDetailView: View {
     private var viewerIndexBinding: Binding<Int> {
         Binding(get: { viewerIndex ?? 0 }, set: { viewerIndex = $0 })
     }
+
+    /// The "more" menu, kept out of `body` so the type checker stays fast.
+    @ViewBuilder
+    private var moreMenu: some View {
+        Menu {
+                        Section {
+                            Button {
+                                onlyOriginalPoster.toggle()
+                            } label: {
+                                Label(
+                                    onlyOriginalPoster ? "显示全部楼层" : "只看楼主",
+                                    systemImage: onlyOriginalPoster ? "person.2" : "person"
+                                )
+                            }
+                        }
+                        Section {
+                            Button {
+                                showPageJump = true
+                            } label: {
+                                Label("跳到指定页（共 \(model.pageCount) 页）", systemImage: "number")
+                            }
+                            Button {
+                                Task { await model.reload() }
+                            } label: {
+                                Label("刷新", systemImage: "arrow.clockwise")
+                            }
+                            if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
+                                ShareLink(item: webURL) {
+                                    Label("分享主题", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                        }
+                        Section {
+                            Button(role: .destructive) {
+                                clearThreadImageCache()
+                            } label: {
+                                Label("清除本帖图片缓存（\(threadImageCount) 张）", systemImage: "trash")
+                            }
+                            .disabled(threadImageCount == 0)
+                        }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("更多")
+    }
+
 }
 
 /// Thread title block, kept out of the main view so its body stays readable.
@@ -713,6 +729,7 @@ private struct SwapTransition: ViewModifier {
 
 // Helpers live in an extension so the view body stays inside the length the
 // lint rules allow; same file, so `private` state is still reachable.
+
 extension ThreadDetailView {
     /// The scrolling list plus everything pinned to it. Kept out of `body` so the
     /// view stays inside what the type checker will accept in one expression.
@@ -969,13 +986,39 @@ extension ThreadDetailView {
     private func registerThreadImages() {
         let tid = model.summary.tid
         let title = model.title
-        let htmls = model.posts.map(\.message)
-        guard !htmls.isEmpty else { return }
+        // Only the posts that arrived since last time: re-scanning the whole
+        // thread on every page append turned into O(n²) parsing.
+        let fresh = model.posts.filter { !scannedPostPids.contains($0.pid) }
+        guard !fresh.isEmpty else { return }
+        let pids = fresh.map(\.pid)
+        let htmls = fresh.map(\.message)
+        scannedPostPids.formUnion(pids)
+
+        #if DEBUG
+        let timing = ProcessInfo.processInfo.environment["S1_PERF_BENCH"] != nil
+        #endif
 
         Task {
+            let started = Date()
             let urls = await Task.detached(priority: .utility) {
                 htmls.flatMap { HTMLParser.imageURLs(in: $0) }
             }.value
+            #if DEBUG
+            if timing {
+                let fast = Date().timeIntervalSince(started) * 1000
+                let slowStart = Date()
+                _ = await Task.detached(priority: .utility) {
+                    htmls.flatMap { html in
+                        HTMLParser.parse(html).compactMap { node -> URL? in
+                            if case .image(let url, let isSmiley) = node, !isSmiley { return url }
+                            return nil
+                        }
+                    }
+                }.value
+                let slow = Date().timeIntervalSince(slowStart) * 1000
+                print("S1_PERF imageURLs posts=\(htmls.count) scan=\(String(format: "%.1f", fast))ms fullParse=\(String(format: "%.1f", slow))ms")
+            }
+            #endif
             ImageCacheIndex.shared.register(tid: tid, title: title, urls: urls)
             threadImageURLs = urls
             threadImageCount = ImageCacheIndex.shared.urls(for: tid).count

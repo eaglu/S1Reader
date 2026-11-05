@@ -100,6 +100,14 @@ https://stage1st.com/2b/api/mobile/index.php?version=4&module=<module>&mobile=2
 - 动效（遵循 HIG「motion」与「feedback」）：骨架屏用自绘占位条 + 条内高光缓扫（1.6s 一轮）；图片下载完成后 0.18s 淡入；收藏按钮用符号弹动（`symbolEffect(.bounce)`）；列表里的 +N 徽标用弹簧缩放出现；新到的楼层（继续加载、底部检查到新回复）用 0.2s 淡入 + 10pt 上浮出现，且只对当次新增的楼生效（往上补载的楼层落在屏幕外，不做这个动画）；跨页跳楼时列表整体做一次交叉淡入淡出（换的是另一页内容，不做滚动动画，避免「瞬移」感）；「加载更早的回复」那行的状态文字用淡入切换；点开帖子图片用 iOS 18+ 的 zoom 转场（`matchedTransitionSource` + `navigationTransition(.zoom)`）；开启「减弱动态效果」时上述动画全部退化为静态或纯透明度变化
 - App 图标为脚本生成的占位图
 
+## 性能
+
+帖子的正文只在需要时解析一次，解析结果按「pid + 字号」缓存在 `PostBodyCache`（`S1Reader/Core/HTML/PostBodyCache.swift`，上限 400 帖）：滚动离开再回来不会重解析；每页到达后会预解析一遍，行滚入时直接出内容。
+
+提取帖子图片不再走完整解析：`HTMLParser.imageURLs(in:)` 只扫 `<img>` 标签（实测每页 0.4–0.5ms，完整解析同页 13.4–13.7ms），并且只扫新到的楼层——多页追加时的工作量从 O(n²) 变成 O(n)。
+
+调试：`S1_PERF=1` 打印每轮翻页实际解析了多少帖子、总耗时与均值；`S1_PERF_BENCH=1` 额外对比「只扫标签」与「完整解析」的耗时。
+
 ## 开发小工具
 
 Debug 构建支持环境变量直达页面，方便截图和调试（模拟器无法点击 UI 时尤其有用）：
