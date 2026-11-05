@@ -592,22 +592,38 @@ struct ThreadHeaderView: View {
     }
 }
 
-/// Floating reply action: one button, no bar.
+/// Floating reply action: one button, no bar. On iOS 26 and later it is a real
+/// Liquid Glass button, so it picks up the same material as the system chrome
+/// instead of a hand-drawn circle.
 struct ReplyFloatingButton: View {
     var action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: "arrowshape.turn.up.left.fill")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(Color.accentColor, in: Circle())
-                .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+        if #available(iOS 26.0, *) {
+            Button(action: action) {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 52, height: 52)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .tint(Color.accentColor)
+            .accessibilityLabel("回复本帖")
+            .padding(.trailing, 18)
+            .padding(.bottom, 18)
+        } else {
+            Button(action: action) {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Color.accentColor, in: Circle())
+                    .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("回复本帖")
+            .padding(.trailing, 18)
+            .padding(.bottom, 18)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("回复本帖")
-        .padding(.trailing, 18)
-        .padding(.bottom, 18)
     }
 }
