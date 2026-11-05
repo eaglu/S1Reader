@@ -152,6 +152,10 @@ struct ThreadListView: View {
 private struct ThreadRow: View {
     let thread: ThreadSummary
 
+    private var newReplies: Int {
+        ThreadVisitStore.shared.newReplies(for: thread.tid, replies: thread.replies)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 6) {
@@ -177,6 +181,15 @@ private struct ThreadRow: View {
             HStack(spacing: 10) {
                 Label(thread.author, systemImage: "person")
                 Label("\(thread.replies)", systemImage: "bubble.left")
+                if newReplies > 0 {
+                    Text("+\(newReplies)")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityLabel("上次浏览后新增 \(newReplies) 条回复")
+                }
                 Label(Formatters.compactCount(thread.views), systemImage: "eye")
                 Spacer(minLength: 0)
             }

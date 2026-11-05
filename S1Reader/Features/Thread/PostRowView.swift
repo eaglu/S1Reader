@@ -136,7 +136,6 @@ struct PostContentView: View {
                     } label: {
                         RemoteImage(url: url, contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: 460)
-                            .clipShape(DeviceCornerShape(inset: 16))
                     }
                     .buttonStyle(.plain)
                     .contextMenu {

@@ -111,6 +111,7 @@ final class ThreadDetailViewModel {
             loadedPages = 1
             hasMore = posts.count < totalPosts
             didLoad = true
+            ThreadVisitStore.shared.markSeen(tid: summary.tid, replies: max(0, totalPosts - 1))
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -584,7 +585,6 @@ private struct ImageViewer: View {
                         .frame(width: proxy.size.width * scale, height: proxy.size.height * scale)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
-                .clipShape(ContainerRelativeShape())
                 .contentShape(Rectangle())
                 .gesture(
                     MagnifyGesture()
