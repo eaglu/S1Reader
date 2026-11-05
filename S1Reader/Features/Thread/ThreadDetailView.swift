@@ -413,7 +413,10 @@ struct ThreadDetailView: View {
                     try? await Task.sleep(for: .milliseconds(200))
                 }
                 try? await Task.sleep(for: .milliseconds(600))
-                await jump(to: pid)
+                await jump(
+                    to: pid,
+                    from: ProcessInfo.processInfo.environment["S1_QUOTE_FROM"]
+                )
                 if ProcessInfo.processInfo.environment["S1_QUOTE_BACK"] == "1" {
                     try? await Task.sleep(for: .milliseconds(1800))
                     returnToOrigin()
@@ -642,7 +645,7 @@ struct ThreadActionButton: View {
     }
 
     private func glyph(_ glyphMode: Mode) -> some View {
-        Image(systemName: glyphMode == .reply ? "arrow.turn.up.left" : "arrow.uturn.backward")
+        Image(systemName: glyphMode == .reply ? "arrow.turn.up.left" : "arrow.backward.to.line")
             .font(.system(size: 20, weight: .semibold))
     }
 }
@@ -746,7 +749,7 @@ extension ThreadDetailView {
         PostRowView(
             post: post,
             onImageTap: openImage,
-            onQuoteTap: { pid in Task { await jump(to: pid) } }
+            onQuoteTap: { pid in Task { await jump(to: pid, from: post.pid) } }
         )
         .id(post.pid)
         .background(post.pid == highlightedPid ? Color.accentColor.opacity(0.12) : Color.clear)
@@ -771,10 +774,10 @@ extension ThreadDetailView {
     }
 
     /// Jumps to the floor a quote points at, loading its page first when needed.
-    private func jump(to pid: String) async {
-        // `visiblePid` is only tracked once the list has settled, so fall back to
-        // the post at the top of what is loaded.
-        let origin = visiblePid ?? model.posts.first?.pid
+    /// `source` is the post the quote was tapped in: it is what "back" returns to,
+    /// which is exact even when the scroll position has not been tracked yet.
+    private func jump(to pid: String, from source: String? = nil) async {
+        let origin = source ?? visiblePid ?? model.posts.first?.pid
         if !model.posts.contains(where: { $0.pid == pid }) {
             guard let page = await APIClient.shared.page(
                 containingPost: pid,
