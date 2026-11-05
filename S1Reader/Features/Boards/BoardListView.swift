@@ -63,7 +63,7 @@ struct BoardListView: View {
             ForEach(Array(filteredSections.enumerated()), id: \.offset) { _, section in
                 Section {
                     ForEach(section.forums) { forum in
-                        NavigationLink(value: forum) {
+                        NavigationLink(value: Route.forum(forum)) {
                             ForumRow(forum: forum)
                         }
                     }

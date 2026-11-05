@@ -137,7 +137,7 @@ struct ThreadListView: View {
             }
 
             ForEach(visibleThreads) { thread in
-                NavigationLink(value: thread) {
+                NavigationLink(value: Route.thread(thread)) {
                     ThreadRow(thread: thread)
                 }
                 .listRowSeparator(.visible)
