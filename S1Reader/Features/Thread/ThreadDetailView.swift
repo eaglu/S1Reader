@@ -20,8 +20,6 @@ final class ThreadDetailViewModel {
     var focusPid: String?
     /// Post to scroll to when reopening a thread that was read before.
     var resumePid: String?
-    /// True when the cookie-carrying request failed and the page came from a guest retry.
-    var usedGuestFallback = false
 
     private var hasMore = true
     private var didLoad = false
@@ -40,21 +38,41 @@ final class ThreadDetailViewModel {
     var hasLoadedOnce: Bool { didLoad }
 
     /// S1 answers some threads with a bare Discuz "System Error" (HTTP 503) only when
-    /// a session cookie is attached, so a 5xx is retried once as a guest.
+    /// a session cookie is attached. A 5xx is retried once as a guest, and the thread
+    /// is remembered so later visits skip the doomed signed-in request entirely.
     private func fetchPage(_ page: Int) async throws -> ThreadPage {
+        let params = ["tid": summary.tid, "page": String(page)]
+
+        if GuestFallbackStore.shared.prefersGuest(tid: summary.tid) {
+            #if DEBUG
+            print("S1 fetchPage tid=\(summary.tid) page=\(page) guest-first")
+            #endif
+            do {
+                return try await APIClient.shared.fetch("viewthread", params, guest: true)
+            } catch {
+                // The guest request stopped working (or the server recovered), so let
+                // the next visit try the signed-in path again.
+                GuestFallbackStore.shared.unmark(summary.tid)
+                throw error
+            }
+        }
+
         do {
-            return try await APIClient.shared.fetch(
-                "viewthread",
-                ["tid": summary.tid, "page": String(page)]
-            )
+            #if DEBUG
+            print("S1 fetchPage tid=\(summary.tid) page=\(page) signed-in")
+            #endif
+            return try await APIClient.shared.fetch("viewthread", params)
         } catch let error as APIError {
             guard Self.isServerSide(error) else { throw error }
             let guest: ThreadPage = try await APIClient.shared.fetch(
                 "viewthread",
-                ["tid": summary.tid, "page": String(page)],
+                params,
                 guest: true
             )
-            usedGuestFallback = true
+            GuestFallbackStore.shared.mark(summary.tid)
+            #if DEBUG
+            print("S1 fetchPage tid=\(summary.tid) page=\(page) guest-fallback")
+            #endif
             return guest
         }
     }
@@ -193,19 +211,6 @@ struct ThreadDetailView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
-
-                if model.usedGuestFallback {
-                    HStack(spacing: 8) {
-                        Image(systemName: "person.crop.circle.badge.exclamationmark")
-                        Text("登录状态下接口报错，已用游客身份加载")
-                        Spacer(minLength: 0)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.orange.opacity(0.12))
-                }
 
                 if let error = model.errorMessage, model.posts.isEmpty {
                     ContentUnavailableView {

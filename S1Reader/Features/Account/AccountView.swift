@@ -11,6 +11,7 @@ struct AccountView: View {
     @Environment(AppModel.self) private var model
     @State private var showLogin = false
     @State private var cacheBytes = 0
+    @State private var guestFallbackCount = 0
     @State private var showLogoutConfirm = false
 
     var body: some View {
@@ -115,10 +116,16 @@ struct AccountView: View {
                     }
                 }
                 .disabled(cacheBytes == 0)
+                if guestFallbackCount > 0 {
+                    Button("清除接口降级记录（\(guestFallbackCount)）") {
+                        GuestFallbackStore.shared.clear()
+                        guestFallbackCount = 0
+                    }
+                }
             } header: {
                 Text("存储")
             } footer: {
-                Text("帖子里的图片会缓存在本地，重新打开主题时不再重新下载。")
+                Text("帖子里的图片会缓存在本地，重新打开主题时不再重新下载。部分主题在登录状态下会被 S1 接口拒绝，客户端会自动改用游客身份读取，这里的记录用于重试登录态。")
             }
 
             Section {
@@ -180,6 +187,7 @@ struct AccountView: View {
 
     private func refreshCacheUsage() async {
         cacheBytes = await ImageLoader.shared.diskUsage()
+        guestFallbackCount = GuestFallbackStore.shared.count
     }
 
     private var appVersion: String {
