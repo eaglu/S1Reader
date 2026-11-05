@@ -4,13 +4,16 @@ import SwiftUI
 enum PostNode: Hashable {
     case text(AttributedString)
     case image(URL, isSmiley: Bool)
+    /// A quoted block (`<div class="reply_wrap">` / `<blockquote>`), rendered as
+    /// its own indented card so it cannot be confused with the reply body.
+    case quote(AttributedString)
 }
 
 /// Converts the HTML fragment returned by the mobile API into renderable nodes.
 /// It intentionally supports only the tag subset S1 actually produces:
-/// br/p/div, font, strong/b, em/i, u, a, img, blockquote.
+/// br/p/div, font, strong/b, em/i, u, a, img, blockquote, div.reply_wrap.
 enum HTMLParser {
-    private struct Style {
+    struct Style {
         var color: Color?
         var bold = false
         var italic = false
@@ -21,170 +24,8 @@ enum HTMLParser {
     }
 
     static func parse(_ html: String) -> [PostNode] {
-        let html = normalize(html)
-        var nodes: [PostNode] = []
-        var text = AttributedString()
-        var pendingNewlines = 0
-        var stack: [(tag: String, style: Style)] = [("root", Style())]
-        var skipping: String?
-        var atLineStart = true
-        var index = html.startIndex
-
-        func currentStyle() -> Style { stack.last?.style ?? Style() }
-
-        func append(_ raw: String) {
-            guard skipping == nil, !raw.isEmpty else { return }
-            let style = currentStyle()
-            for character in raw {
-                if character == "\n" {
-                    pendingNewlines += 1
-                    atLineStart = true
-                    continue
-                }
-                if character == " " || character == "\t" || character == "\u{00A0}" {
-                    if atLineStart { continue }
-                    if pendingNewlines > 0 {
-                        let count = min(pendingNewlines, 2)
-                        var newlines = AttributedString(String(repeating: "\n", count: count))
-                        apply(style, to: &newlines)
-                        text += newlines
-                        pendingNewlines = 0
-                    }
-                    var space = AttributedString(" ")
-                    apply(style, to: &space)
-                    text += space
-                    continue
-                }
-                if pendingNewlines > 0 {
-                    let count = min(pendingNewlines, 2)
-                    var newlines = AttributedString(String(repeating: "\n", count: count))
-                    apply(style, to: &newlines)
-                    text += newlines
-                    pendingNewlines = 0
-                }
-                var chunk = AttributedString(String(character))
-                apply(style, to: &chunk)
-                text += chunk
-                atLineStart = false
-            }
-        }
-
-        func flush() {
-            var copy = text
-            while let last = copy.characters.last, last == "\n" || last == " " {
-                let end = copy.endIndex
-                let start = copy.index(end, offsetByCharacters: -1)
-                copy.removeSubrange(start..<end)
-            }
-            if !copy.characters.isEmpty {
-                nodes.append(.text(copy))
-            }
-            text = AttributedString()
-            pendingNewlines = 0
-        }
-
-        func appendImage(_ attributes: [String: String]) {
-            let candidate = attributes["file"] ?? attributes["zoomfile"] ?? attributes["src"] ?? ""
-            let decoded = decodeEntities(candidate).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !decoded.isEmpty, !decoded.hasPrefix("static/image/common/none"),
-                  let url = resolveURL(decoded) else { return }
-            flush()
-            nodes.append(.image(url, isSmiley: isSmiley(url)))
-        }
-
-        while index < html.endIndex {
-            guard let tagStart = html[index...].firstIndex(of: "<") else {
-                append(decodeEntities(String(html[index...])))
-                break
-            }
-            if tagStart > index {
-                append(decodeEntities(String(html[index..<tagStart])))
-            }
-            guard let tagEnd = html[tagStart...].firstIndex(of: ">") else { break }
-            let rawTag = String(html[html.index(after: tagStart)..<tagEnd])
-            index = html.index(after: tagEnd)
-
-            var body = rawTag.trimmingCharacters(in: .whitespacesAndNewlines)
-            let isClosing = body.hasPrefix("/")
-            if isClosing { body.removeFirst() }
-            let selfClosing = body.hasSuffix("/")
-            if selfClosing { body.removeLast() }
-            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            let pieces = body.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-            let name = pieces.first?.lowercased() ?? ""
-            let attributes = pieces.count > 1 ? parseAttributes(String(pieces[1])) : [:]
-
-            if let skipTag = skipping {
-                if isClosing && name == skipTag { skipping = nil }
-                continue
-            }
-
-            switch name {
-            case "script", "style":
-                if !isClosing { skipping = name }
-
-            case "br":
-                append("\n")
-
-            case "p", "div", "tr", "li":
-                if isClosing || !selfClosing { append("\n") }
-
-            case "blockquote":
-                if isClosing {
-                    popTag("blockquote", from: &stack)
-                    append("\n")
-                } else {
-                    append("\n")
-                    var style = currentStyle()
-                    style.quoteDepth += 1
-                    style.color = .secondary
-                    stack.append(("blockquote", style))
-                }
-
-            case "strong", "b":
-                update(&stack, tag: "strong", isClosing: isClosing) { $0.bold = true }
-
-            case "em", "i":
-                update(&stack, tag: "em", isClosing: isClosing) { $0.italic = true }
-
-            case "u", "ins":
-                update(&stack, tag: "u", isClosing: isClosing) { $0.underline = true }
-
-            case "font":
-                update(&stack, tag: "font", isClosing: isClosing) { style in
-                    if let hex = attributes["color"], let color = Color(hex: hex) {
-                        style.color = color
-                    }
-                    if let size = attributes["size"], let value = Int(size) {
-                        style.size = fontPointSize(for: value)
-                    }
-                }
-
-            case "span":
-                update(&stack, tag: "span", isClosing: isClosing) { style in
-                    if let value = attributes["style"], let hex = cssColor(in: value), let color = Color(hex: hex) {
-                        style.color = color
-                    }
-                }
-
-            case "a":
-                update(&stack, tag: "a", isClosing: isClosing) { style in
-                    if let href = attributes["href"], let url = resolveURL(href) {
-                        style.link = url
-                    }
-                }
-
-            case "img":
-                if !isClosing { appendImage(attributes) }
-
-            default:
-                break
-            }
-        }
-
-        flush()
-        return nodes
+        var builder = PostBuilder(html: normalize(html))
+        return builder.run()
     }
 
     /// Non-smiley images referenced by a post, used for cache bookkeeping.
@@ -195,9 +36,25 @@ enum HTMLParser {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Text attributes
 
-    private static func apply(_ style: Style, to string: inout AttributedString) {
+    fileprivate static func apply(_ style: Style, to string: inout AttributedString) {
+        if style.quoteDepth > 0 {
+            // Quoted text is always smaller and secondary, whatever inline
+            // formatting the original author used.
+            var font = Font.system(size: style.size.map { min($0, 14) } ?? 13.5)
+            if style.bold { font = font.bold() }
+            if style.italic { font = font.italic() }
+            string.font = font
+            string.foregroundColor = .secondary
+            if let link = style.link {
+                string.link = link
+                string.underlineStyle = .single
+            } else if style.underline {
+                string.underlineStyle = .single
+            }
+            return
+        }
         if style.bold || style.italic || style.size != nil {
             var font = Font.system(size: style.size ?? 17)
             if style.bold { font = font.bold() }
@@ -217,31 +74,9 @@ enum HTMLParser {
         }
     }
 
-    private static func update(
-        _ stack: inout [(tag: String, style: Style)],
-        tag: String,
-        isClosing: Bool,
-        _ mutate: (inout Style) -> Void
-    ) {
-        if isClosing {
-            popTag(tag, from: &stack)
-        } else {
-            var style = stack.last?.style ?? Style()
-            mutate(&style)
-            stack.append((tag, style))
-        }
-    }
+    // MARK: - Tag helpers
 
-    private static func popTag(_ tag: String, from stack: inout [(tag: String, style: Style)]) {
-        guard stack.count > 1 else { return }
-        if let index = stack.lastIndex(where: { $0.tag == tag }), index > 0 {
-            stack.removeSubrange(index...)
-        } else {
-            stack.removeLast()
-        }
-    }
-
-    private static func parseAttributes(_ source: String) -> [String: String] {
+    fileprivate static func parseAttributes(_ source: String) -> [String: String] {
         var result: [String: String] = [:]
         let pattern = "([a-zA-Z_:][-a-zA-Z0-9_:.]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
@@ -259,7 +94,7 @@ enum HTMLParser {
         return result
     }
 
-    private static func cssColor(in style: String) -> String? {
+    fileprivate static func cssColor(in style: String) -> String? {
         let pattern = "color\\s*:\\s*([#a-zA-Z0-9(),.% ]+)"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
         let range = NSRange(style.startIndex..<style.endIndex, in: style)
@@ -268,7 +103,7 @@ enum HTMLParser {
         return String(style[valueRange]).trimmingCharacters(in: .whitespaces)
     }
 
-    private static func fontPointSize(for discuzSize: Int) -> CGFloat {
+    fileprivate static func fontPointSize(for discuzSize: Int) -> CGFloat {
         switch discuzSize {
         case 1: return 12
         case 2: return 14
@@ -280,7 +115,7 @@ enum HTMLParser {
         }
     }
 
-    private static func resolveURL(_ raw: String) -> URL? {
+    fileprivate static func resolveURL(_ raw: String) -> URL? {
         let value = raw.hasPrefix("//") ? "https:" + raw : raw
         if value.hasPrefix("http") {
             return URL(string: value)
@@ -288,13 +123,13 @@ enum HTMLParser {
         return URL(string: value, relativeTo: APIClient.baseURL)?.absoluteURL
     }
 
-    private static func isSmiley(_ url: URL) -> Bool {
+    fileprivate static func isSmiley(_ url: URL) -> Bool {
         let path = url.path.lowercased()
         return path.contains("/smiley/") || path.contains("/smilies/")
     }
 
     /// Collapses the `<br /><br /><br />&nbsp;` noise Discuz leaves behind.
-    private static func normalize(_ html: String) -> String {
+    fileprivate static func normalize(_ html: String) -> String {
         var result = html
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -347,6 +182,284 @@ enum HTMLParser {
             }
         }
         return output
+    }
+}
+
+/// Tokenizes a Discuz post body and accumulates `PostNode`s.
+private struct PostBuilder {
+    private let html: String
+    private var index: String.Index
+    private var nodes: [PostNode] = []
+    private var text = AttributedString()
+    private var pendingNewlines = 0
+    private var stack: [(tag: String, style: HTMLParser.Style)] = [("root", HTMLParser.Style())]
+    private var skipping: String?
+    private var atLineStart = true
+    private var quoteBuffer: AttributedString?
+    private var quoteDepth = 0
+    private var divDepth = 0
+    private var quoteDivDepths: [Int] = []
+
+    init(html: String) {
+        self.html = html
+        index = html.startIndex
+    }
+
+    private var currentStyle: HTMLParser.Style { stack.last?.style ?? HTMLParser.Style() }
+
+    mutating func run() -> [PostNode] {
+        while index < html.endIndex {
+            guard let tagStart = html[index...].firstIndex(of: "<") else {
+                append(HTMLParser.decodeEntities(String(html[index...])))
+                break
+            }
+            if tagStart > index {
+                append(HTMLParser.decodeEntities(String(html[index..<tagStart])))
+            }
+            guard let tagEnd = html[tagStart...].firstIndex(of: ">") else { break }
+            let rawTag = String(html[html.index(after: tagStart)..<tagEnd])
+            index = html.index(after: tagEnd)
+            handleTag(rawTag)
+        }
+        if quoteDepth > 0 {
+            quoteDepth = 0
+            emitQuoteBuffer(force: true)
+        }
+        flush()
+        return nodes
+    }
+
+    // MARK: - Tokens
+
+    private mutating func handleTag(_ rawTag: String) {
+        var body = rawTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isClosing = body.hasPrefix("/")
+        if isClosing { body.removeFirst() }
+        let selfClosing = body.hasSuffix("/")
+        if selfClosing { body.removeLast() }
+        body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pieces = body.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let name = pieces.first?.lowercased() ?? ""
+        let attributes = pieces.count > 1 ? HTMLParser.parseAttributes(String(pieces[1])) : [:]
+
+        if let skipTag = skipping {
+            if isClosing && name == skipTag { skipping = nil }
+            return
+        }
+
+        switch name {
+        case "script", "style":
+            if !isClosing { skipping = name }
+        case "br":
+            append("\n")
+        case "p", "div", "tr", "li", "blockquote":
+            handleBlock(name, attributes: attributes, isClosing: isClosing, selfClosing: selfClosing)
+        case "img":
+            if !isClosing { appendImage(attributes) }
+        default:
+            handleInline(name, attributes: attributes, isClosing: isClosing)
+        }
+    }
+
+    private mutating func handleBlock(
+        _ name: String,
+        attributes: [String: String],
+        isClosing: Bool,
+        selfClosing: Bool
+    ) {
+        switch name {
+        case "blockquote":
+            if isClosing { closeQuote() } else { openQuote() }
+        case "div":
+            handleDiv(attributes: attributes, isClosing: isClosing, selfClosing: selfClosing)
+        default:
+            if isClosing || !selfClosing { append("\n") }
+        }
+    }
+
+    /// Discuz wraps quotes in `<div class="reply_wrap">`; without this the quoted
+    /// text is indistinguishable from the reply. The closing `</div>` carries no
+    /// attributes, so the open containers are tracked by nesting depth.
+    private mutating func handleDiv(attributes: [String: String], isClosing: Bool, selfClosing: Bool) {
+        let classes = attributes["class"]?.lowercased() ?? ""
+        let isQuote = classes.contains("reply_wrap") || classes.contains("quote")
+
+        if isClosing {
+            if quoteDivDepths.last == divDepth {
+                quoteDivDepths.removeLast()
+                closeQuote()
+            } else {
+                append("\n")
+            }
+            divDepth = max(0, divDepth - 1)
+            return
+        }
+        if selfClosing { return }
+
+        divDepth += 1
+        if isQuote {
+            quoteDivDepths.append(divDepth)
+            openQuote()
+        } else {
+            append("\n")
+        }
+    }
+
+    private mutating func handleInline(_ name: String, attributes: [String: String], isClosing: Bool) {
+        switch name {
+        case "strong", "b":
+            update(tag: "strong", isClosing: isClosing) { $0.bold = true }
+        case "em", "i":
+            update(tag: "em", isClosing: isClosing) { $0.italic = true }
+        case "u", "ins":
+            update(tag: "u", isClosing: isClosing) { $0.underline = true }
+        case "font":
+            update(tag: "font", isClosing: isClosing) { style in
+                if let hex = attributes["color"], let color = Color(hex: hex) {
+                    style.color = color
+                }
+                if let size = attributes["size"], let value = Int(size) {
+                    style.size = HTMLParser.fontPointSize(for: value)
+                }
+            }
+        case "span":
+            update(tag: "span", isClosing: isClosing) { style in
+                guard let value = attributes["style"],
+                      let hex = HTMLParser.cssColor(in: value),
+                      let color = Color(hex: hex) else { return }
+                style.color = color
+            }
+        case "a":
+            update(tag: "a", isClosing: isClosing) { style in
+                guard let href = attributes["href"], let url = HTMLParser.resolveURL(href) else { return }
+                style.link = url
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: - Text
+
+    private mutating func append(_ raw: String) {
+        guard skipping == nil, !raw.isEmpty else { return }
+        let style = currentStyle
+        for character in raw {
+            if character == "\n" {
+                pendingNewlines += 1
+                atLineStart = true
+                continue
+            }
+            if character == " " || character == "\t" || character == "\u{00A0}" {
+                if atLineStart { continue }
+                if pendingNewlines > 0 { flushPendingNewlines(style) }
+                var space = AttributedString(" ")
+                HTMLParser.apply(style, to: &space)
+                emit(space)
+                continue
+            }
+            if pendingNewlines > 0 { flushPendingNewlines(style) }
+            var chunk = AttributedString(String(character))
+            HTMLParser.apply(style, to: &chunk)
+            emit(chunk)
+            atLineStart = false
+        }
+    }
+
+    private mutating func flushPendingNewlines(_ style: HTMLParser.Style) {
+        let count = min(pendingNewlines, 2)
+        var newlines = AttributedString(String(repeating: "\n", count: count))
+        HTMLParser.apply(style, to: &newlines)
+        emit(newlines)
+        pendingNewlines = 0
+    }
+
+    private mutating func emit(_ string: AttributedString) {
+        if quoteBuffer != nil {
+            quoteBuffer! += string
+        } else {
+            text += string
+        }
+    }
+
+    private mutating func flush() {
+        var copy = text
+        while let last = copy.characters.last, last == "\n" || last == " " {
+            copy.removeSubrange(copy.index(copy.endIndex, offsetByCharacters: -1)..<copy.endIndex)
+        }
+        if !copy.characters.isEmpty {
+            nodes.append(.text(copy))
+        }
+        text = AttributedString()
+        pendingNewlines = 0
+    }
+
+    // MARK: - Quotes
+
+    private mutating func openQuote() {
+        flush()
+        quoteDepth += 1
+        if quoteBuffer == nil { quoteBuffer = AttributedString() }
+        var style = currentStyle
+        style.quoteDepth += 1
+        style.color = .secondary
+        stack.append(("quote", style))
+    }
+
+    private mutating func closeQuote() {
+        popTag("quote")
+        quoteDepth = max(0, quoteDepth - 1)
+        emitQuoteBuffer(force: false)
+    }
+
+    private mutating func emitQuoteBuffer(force: Bool) {
+        guard quoteDepth == 0 || force, var copy = quoteBuffer else { return }
+        quoteBuffer = nil
+        while let first = copy.characters.first, first == "\n" || first == " " {
+            copy.removeSubrange(copy.startIndex..<copy.index(copy.startIndex, offsetByCharacters: 1))
+        }
+        while let last = copy.characters.last, last == "\n" || last == " " {
+            copy.removeSubrange(copy.index(copy.endIndex, offsetByCharacters: -1)..<copy.endIndex)
+        }
+        if !copy.characters.isEmpty {
+            nodes.append(.quote(copy))
+        }
+    }
+
+    // MARK: - Images
+
+    private mutating func appendImage(_ attributes: [String: String]) {
+        // Images inside a quote are dropped: the quote renders as one text card,
+        // and the original picture is one tap away.
+        guard quoteBuffer == nil else { return }
+        let candidate = attributes["file"] ?? attributes["zoomfile"] ?? attributes["src"] ?? ""
+        let decoded = HTMLParser.decodeEntities(candidate).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !decoded.isEmpty, !decoded.hasPrefix("static/image/common/none"),
+              let url = HTMLParser.resolveURL(decoded) else { return }
+        flush()
+        nodes.append(.image(url, isSmiley: HTMLParser.isSmiley(url)))
+    }
+
+    // MARK: - Style stack
+
+    private mutating func update(tag: String, isClosing: Bool, _ mutate: (inout HTMLParser.Style) -> Void) {
+        if isClosing {
+            popTag(tag)
+        } else {
+            var style = currentStyle
+            mutate(&style)
+            stack.append((tag, style))
+        }
+    }
+
+    private mutating func popTag(_ tag: String) {
+        guard stack.count > 1 else { return }
+        if let index = stack.lastIndex(where: { $0.tag == tag }), index > 0 {
+            stack.removeSubrange(index...)
+        } else {
+            stack.removeLast()
+        }
     }
 }
 

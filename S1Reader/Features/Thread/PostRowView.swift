@@ -67,6 +67,7 @@ struct PostContentView: View {
 
     private enum Block {
         case text(Text)
+        case quote(AttributedString)
         case image(URL)
     }
 
@@ -97,6 +98,9 @@ struct PostContentView: View {
                     flush()
                     result.append(.image(url))
                 }
+            case .quote(let attributed):
+                flush()
+                result.append(.quote(attributed))
             }
         }
         flush()
@@ -111,6 +115,24 @@ struct PostContentView: View {
                     text
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                case .quote(let attributed):
+                    Text(attributed)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
+                        .padding(.leading, 12)
+                        .padding(.trailing, 10)
+                        .background(
+                            Color.secondary.opacity(0.07),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                        .overlay(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.5))
+                                .frame(width: 3)
+                                .padding(.vertical, 6)
+                        }
                 case .image(let url):
                     Button {
                         onImageTap(url)
