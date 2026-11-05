@@ -194,6 +194,7 @@ final class ThreadDetailViewModel {
                 return
             }
             posts.append(contentsOf: fresh)
+            markFresh(fresh.map(\.pid))
             loadedPages = next
             #if DEBUG
             print("S1 loadMore page=\(next) added=\(fresh.count) posts=\(posts.count) top=\(posts.first?.pid ?? "-")")
@@ -205,6 +206,25 @@ final class ThreadDetailViewModel {
         } catch {
             errorMessage = error.localizedDescription
             hasMore = false
+        }
+    }
+
+    /// Posts that arrived in the most recent insert, so the list can give only
+    /// those rows an entrance. Cleared shortly after.
+    private(set) var freshPids: Set<String> = []
+    private var freshToken = 0
+
+    func isFresh(_ pid: String) -> Bool { freshPids.contains(pid) }
+
+    private func markFresh(_ pids: [String]) {
+        guard !pids.isEmpty else { return }
+        freshPids = Set(pids)
+        freshToken += 1
+        let token = freshToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard token == self.freshToken else { return }
+            self.freshPids = []
         }
     }
 
@@ -228,6 +248,7 @@ final class ThreadDetailViewModel {
             }
             if !fresh.isEmpty {
                 posts.append(contentsOf: fresh)
+                markFresh(fresh.map(\.pid))
                 hasMore = posts.count < totalPosts
                 ThreadVisitStore.shared.markSeen(tid: summary.tid, replies: max(0, totalPosts - 1))
             }
@@ -257,6 +278,8 @@ final class ThreadDetailViewModel {
             let existing = Set(posts.map(\.pid))
             let older = result.posts.filter { !existing.contains($0.pid) }
             if !older.isEmpty {
+                // No entrance here: these rows land above the viewport, so the
+                // fade would play where nobody can see it.
                 posts.insert(contentsOf: older, at: 0)
             }
             firstLoadedPage = target
@@ -366,6 +389,13 @@ struct ThreadDetailView: View {
                 for _ in 0..<max(0, times) {
                     try? await Task.sleep(for: .milliseconds(500))
                     await model.loadMore()
+                    // S1_FRESH_SCROLL=1 reveals the rows that just arrived so the
+                    // entrance can be filmed (they normally land off-screen).
+                    if ProcessInfo.processInfo.environment["S1_FRESH_SCROLL"] != nil,
+                       let first = model.posts.first(where: { model.isFresh($0.pid) }) {
+                        try? await Task.sleep(for: .milliseconds(60))
+                        visiblePid = first.pid
+                    }
                 }
             }
             // S1_JUMP_PAGE=<n> then S1_LOAD_EARLIER=<n> exercise jumping to a late
@@ -759,6 +789,7 @@ extension ThreadDetailView {
             zoomNamespace: imageZoom
         )
         .id(post.pid)
+        .rowEntrance(isNew: model.isFresh(post.pid))
         .background(post.pid == highlightedPid ? Color.accentColor.opacity(0.12) : Color.clear)
         .animation(.easeOut(duration: 0.35), value: highlightedPid)
         .onAppear {
