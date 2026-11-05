@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import UIKit
 
 @MainActor
 @Observable
@@ -19,6 +20,8 @@ final class ThreadDetailViewModel {
     var focusPid: String?
     /// Post to scroll to when reopening a thread that was read before.
     var resumePid: String?
+    /// True when the cookie-carrying request failed and the page came from a guest retry.
+    var usedGuestFallback = false
 
     private var hasMore = true
     private var didLoad = false
@@ -36,6 +39,37 @@ final class ThreadDetailViewModel {
 
     var hasLoadedOnce: Bool { didLoad }
 
+    /// S1 answers some threads with a bare Discuz "System Error" (HTTP 503) only when
+    /// a session cookie is attached, so a 5xx is retried once as a guest.
+    private func fetchPage(_ page: Int) async throws -> ThreadPage {
+        do {
+            return try await APIClient.shared.fetch(
+                "viewthread",
+                ["tid": summary.tid, "page": String(page)]
+            )
+        } catch let error as APIError {
+            guard Self.isServerSide(error) else { throw error }
+            let guest: ThreadPage = try await APIClient.shared.fetch(
+                "viewthread",
+                ["tid": summary.tid, "page": String(page)],
+                guest: true
+            )
+            usedGuestFallback = true
+            return guest
+        }
+    }
+
+    private static func isServerSide(_ error: APIError) -> Bool {
+        switch error {
+        case .http(let code):
+            return code >= 500
+        case .server:
+            return true
+        default:
+            return false
+        }
+    }
+
     func loadIfNeeded() async {
         guard !didLoad else { return }
         await reload()
@@ -48,10 +82,7 @@ final class ThreadDetailViewModel {
         defer { isLoading = false }
 
         do {
-            let result: ThreadPage = try await APIClient.shared.fetch(
-                "viewthread",
-                ["tid": summary.tid, "page": "1"]
-            )
+            let result = try await fetchPage(1)
             posts = result.posts
             perPage = result.perPage
             if let info = result.thread {
@@ -88,10 +119,7 @@ final class ThreadDetailViewModel {
         defer { isLoading = false }
 
         do {
-            let result: ThreadPage = try await APIClient.shared.fetch(
-                "viewthread",
-                ["tid": summary.tid, "page": String(clamped)]
-            )
+            let result = try await fetchPage(clamped)
             posts = result.posts
             perPage = result.perPage
             if let info = result.thread {
@@ -118,10 +146,7 @@ final class ThreadDetailViewModel {
         defer { isLoadingMore = false }
 
         do {
-            let result: ThreadPage = try await APIClient.shared.fetch(
-                "viewthread",
-                ["tid": summary.tid, "page": String(next)]
-            )
+            let result = try await fetchPage(next)
             let existing = Set(posts.map(\.pid))
             let fresh = result.posts.filter { !existing.contains($0.pid) }
             if fresh.isEmpty {
@@ -158,6 +183,7 @@ struct ThreadDetailView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var threadImageCount = 0
     @State private var cacheNotice: String?
+    @State private var copiedDiagnostics = false
 
     init(summary: ThreadSummary) {
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
@@ -167,6 +193,19 @@ struct ThreadDetailView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
+
+                if model.usedGuestFallback {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.crop.circle.badge.exclamationmark")
+                        Text("登录状态下接口报错，已用游客身份加载")
+                        Spacer(minLength: 0)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.orange.opacity(0.12))
+                }
 
                 if let error = model.errorMessage, model.posts.isEmpty {
                     ContentUnavailableView {
@@ -184,6 +223,14 @@ struct ThreadDetailView: View {
                             Button("登录") { showLogin = true }
                                 .buttonStyle(.bordered)
                         }
+                        Button(copiedDiagnostics ? "已复制诊断信息" : "复制诊断信息") {
+                            Task {
+                                let details = await APIClient.shared.diagnostics()
+                                UIPasteboard.general.string = "tid: \(model.summary.tid)\n\(details)"
+                                copiedDiagnostics = true
+                            }
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .padding(.top, 60)
                 }

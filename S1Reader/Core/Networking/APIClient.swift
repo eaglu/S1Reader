@@ -46,6 +46,14 @@ struct APIEnvelope<T: Decodable>: Decodable {
     }
 }
 
+/// Last non-2xx response, kept so the UI can offer copyable diagnostics.
+struct APIFailure: Sendable {
+    let status: Int
+    let module: String
+    let bodyPrefix: String
+    let wasGuest: Bool
+}
+
 /// Thin client for the Discuz! mobile API exposed by stage1st.com.
 actor APIClient {
     static let shared = APIClient()
@@ -56,6 +64,14 @@ actor APIClient {
     private let session: URLSession
     var formhash: String?
     var member: Member?
+    private(set) var lastFailure: APIFailure?
+
+    /// Whether the cookie jar still holds a Discuz session.
+    nonisolated static var hasStoredSession: Bool {
+        (HTTPCookieStorage.shared.cookies ?? []).contains {
+            $0.name.hasSuffix("_auth") && !$0.value.isEmpty
+        }
+    }
 
     init() {
         let configuration = URLSessionConfiguration.default
@@ -75,8 +91,14 @@ actor APIClient {
     var cachedMember: Member? { member }
     var cachedFormhash: String? { formhash }
 
-    func fetch<T: Decodable>(_ module: String, _ params: [String: String] = [:]) async throws -> T {
-        let data = try await rawFetch(module, params)
+    /// `guest: true` sends the request without cookies, for retrying a thread that
+    /// only fails while a session is attached.
+    func fetch<T: Decodable>(
+        _ module: String,
+        _ params: [String: String] = [:],
+        guest: Bool = false
+    ) async throws -> T {
+        let data = try await rawFetch(module, params, guest: guest)
 
         do {
             let envelope = try JSONDecoder().decode(APIEnvelope<T>.self, from: data)
@@ -105,17 +127,46 @@ actor APIClient {
 
     /// Retries transient failures: S1 answers 503 (a bare Discuz "System Error"
     /// page) both when it is overloaded and when a request is rate limited.
-    private func rawFetch(_ module: String, _ params: [String: String]) async throws -> Data {
+    private func rawFetch(
+        _ module: String,
+        _ params: [String: String],
+        guest: Bool = false
+    ) async throws -> Data {
         var attempt = 0
         while true {
             do {
-                return try await performFetch(module, params)
+                return try await performFetch(module, params, guest: guest)
             } catch let error as APIError {
                 attempt += 1
                 guard attempt < 3, Self.isRetryable(error) else { throw error }
                 try? await Task.sleep(for: .milliseconds(attempt == 1 ? 400 : 1200))
             }
         }
+    }
+
+    /// First part of an error page, with the markup flattened for display.
+    private static func snippet(of data: Data) -> String {
+        let text = String(decoding: data.prefix(2000), as: UTF8.self)
+        let flattened = text
+            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(flattened.prefix(200))
+    }
+
+    /// Diagnostics for the "copy" button in the error view.
+    func diagnostics() -> String {
+        let failure = lastFailure
+        let loggedIn = member != nil ? "已登录（\(member?.username ?? "")）" : "未登录"
+        return [
+            "S1Reader 诊断",
+            "module: \(failure?.module ?? "-")",
+            "status: \(failure.map { String($0.status) } ?? "200/未知")",
+            "guest: \(failure?.wasGuest == true ? "是" : "否")",
+            "session: \(Self.hasStoredSession ? "有 auth cookie" : "无 auth cookie")",
+            "account: \(loggedIn)",
+            "body: \(failure?.bodyPrefix ?? "-")"
+        ].joined(separator: "\n")
     }
 
     private static func isRetryable(_ error: APIError) -> Bool {
@@ -129,7 +180,11 @@ actor APIClient {
         }
     }
 
-    private func performFetch(_ module: String, _ params: [String: String]) async throws -> Data {
+    private func performFetch(
+        _ module: String,
+        _ params: [String: String],
+        guest: Bool = false
+    ) async throws -> Data {
         guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw APIError.badURL
         }
@@ -146,6 +201,24 @@ actor APIClient {
         guard let url = components.url else { throw APIError.badURL }
         var request = URLRequest(url: url)
         request.setValue("https://stage1st.com/2b/", forHTTPHeaderField: "Referer")
+        request.httpShouldHandleCookies = !guest
+
+        #if DEBUG
+        // S1_FORCE_503=1 makes the first (cookie-carrying) attempt fail so the guest
+        // fallback can be exercised without a real account; =2 also fails the retry
+        // so the error screen (and its diagnostics button) can be checked.
+        if let mode = ProcessInfo.processInfo.environment["S1_FORCE_503"],
+           module == "viewthread",
+           mode == "2" || (!guest && mode == "1") {
+            lastFailure = APIFailure(
+                status: 503,
+                module: module,
+                bodyPrefix: "stage1st.com - System Error（模拟）",
+                wasGuest: guest
+            )
+            throw APIError.http(503)
+        }
+        #endif
 
         let data: Data
         let response: URLResponse
@@ -156,6 +229,12 @@ actor APIClient {
         }
 
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            lastFailure = APIFailure(
+                status: http.statusCode,
+                module: module,
+                bodyPrefix: Self.snippet(of: data),
+                wasGuest: guest
+            )
             throw Self.httpError(http.statusCode)
         }
         return data
@@ -168,6 +247,23 @@ actor APIClient {
         var password: String
         var questionID: Int = 0
         var answer: String = ""
+    }
+
+    /// Keeps a single cookie per name: leftover duplicates from earlier sessions make
+    /// Discuz read a stale `auth` value.
+    private func pruneDuplicateCookies() {
+        let store = HTTPCookieStorage.shared
+        let cookies = store.cookies ?? []
+        let s1 = cookies.filter { $0.domain.hasSuffix("stage1st.com") }
+        let duplicates = Dictionary(grouping: s1, by: { "\($0.name)|\($0.path)" })
+            .values
+            .filter { $0.count > 1 }
+        for group in duplicates {
+            let sorted = group.sorted { $0.expiresDate ?? .distantPast < $1.expiresDate ?? .distantPast }
+            for cookie in sorted.dropLast() {
+                store.deleteCookie(cookie)
+            }
+        }
     }
 
     func login(_ input: LoginInput) async throws -> Member {
@@ -190,6 +286,7 @@ actor APIClient {
         let envelope = try decodeEnvelope(Member.self, from: data)
 
         if let loggedIn = envelope.variables, loggedIn.isLoggedIn {
+            pruneDuplicateCookies()
             member = loggedIn
             formhash = loggedIn.formhash ?? formhash
             return loggedIn
