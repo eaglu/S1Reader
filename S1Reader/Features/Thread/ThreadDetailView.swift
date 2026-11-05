@@ -191,6 +191,9 @@ final class ThreadDetailViewModel {
             }
             posts.append(contentsOf: fresh)
             loadedPages = next
+            #if DEBUG
+            print("S1 loadMore page=\(next) added=\(fresh.count) posts=\(posts.count) top=\(posts.first?.pid ?? "-")")
+            #endif
             if let info = result.thread {
                 totalPosts = info.replies + 1
             }
@@ -251,6 +254,18 @@ struct ThreadDetailView: View {
     @State private var didRestorePosition = false
     @State private var isRestoringPosition = false
     @State private var saveTask: Task<Void, Never>?
+    /// Where the list stood when the last page was fetched, so a page is only
+    /// pulled once per approach instead of as fast as the screen can fill.
+    @State private var lastNextPageAnchor = Marker.none
+    @State private var lastEarlierPageAnchor = Marker.none
+
+    private enum Marker {
+        /// Never equal to a real anchor, so the first approach always loads.
+        static let none = "\u{0}"
+        static let empty = "\u{1}"
+    }
+
+    private var topAnchorKey: String { visiblePid ?? Marker.empty }
     @State private var threadImageCount = 0
     @State private var cacheNotice: String?
 
@@ -285,6 +300,13 @@ struct ThreadDetailView: View {
                         .id(post.pid)
                         .onAppear {
                             guard post.pid == visiblePosts.last?.pid else { return }
+                            guard lastNextPageAnchor != topAnchorKey else {
+                                #if DEBUG
+                                print("S1 loadMore skipped: same approach (top=\(topAnchorKey))")
+                                #endif
+                                return
+                            }
+                            lastNextPageAnchor = topAnchorKey
                             Task { await model.loadMore() }
                         }
                     Divider()
@@ -385,6 +407,15 @@ struct ThreadDetailView: View {
             if let raw = ProcessInfo.processInfo.environment["S1_LOAD_EARLIER"], let times = Int(raw) {
                 for _ in 0..<max(0, times) {
                     try? await Task.sleep(for: .milliseconds(400))
+                    await loadEarlierKeepingPlace(force: true)
+                }
+            }
+            // S1_LOAD_EARLIER_GATED=<n> replays the scroll-triggered path, which
+            // must load only the first page and then hold until the list moves.
+            if let raw = ProcessInfo.processInfo.environment["S1_LOAD_EARLIER_GATED"],
+               let times = Int(raw) {
+                for _ in 0..<max(0, times) {
+                    try? await Task.sleep(for: .milliseconds(500))
                     await loadEarlierKeepingPlace()
                 }
             }
@@ -597,7 +628,7 @@ extension ThreadDetailView {
                 isLoading: model.isLoadingMore,
                 page: model.firstLoadedPage - 1
             ) {
-                Task { await loadEarlierKeepingPlace() }
+                Task { await loadEarlierKeepingPlace(force: true) }
             }
             Divider()
         }
@@ -605,8 +636,18 @@ extension ThreadDetailView {
 
     /// Loads the previous page and scrolls back to the post that was on top, so
     /// prepending content does not shove the reader's place down the screen.
-    private func loadEarlierKeepingPlace() async {
+    private func loadEarlierKeepingPlace(force: Bool = false) async {
         guard !model.isLoadingMore else { return }
+        // Pulling past the top fires many times in a row; one page per approach.
+        if !force {
+            guard lastEarlierPageAnchor != topAnchorKey else {
+                #if DEBUG
+                print("S1 loadEarlier skipped: same approach (top=\(topAnchorKey))")
+                #endif
+                return
+            }
+        }
+        lastEarlierPageAnchor = topAnchorKey
         let topBefore = visiblePid
         guard let anchor = await model.loadEarlier() else {
             return
