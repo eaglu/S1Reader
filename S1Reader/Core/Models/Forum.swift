@@ -85,6 +85,26 @@ struct Forum: Decodable, Identifiable, Hashable, Sendable {
         todayPosts = container.flexInt(.todayposts)
         subforums = (try? container.decodeIfPresent([Forum].self, forKey: .sublist)) ?? []
     }
+
+    /// Used when a link only carries a fid and the board details come from a
+    /// forum listing instead of the full index.
+    init(
+        fid: String,
+        name: String,
+        description: String = "",
+        threads: Int = 0,
+        posts: Int = 0,
+        todayPosts: Int = 0,
+        subforums: [Forum] = []
+    ) {
+        self.fid = fid
+        self.name = name
+        self.description = description
+        self.threads = threads
+        self.posts = posts
+        self.todayPosts = todayPosts
+        self.subforums = subforums
+    }
 }
 
 struct ForumCategory: Decodable, Identifiable, Hashable, Sendable {

@@ -12,8 +12,30 @@ struct RootView: View {
     /// own toolbar is only torn down after the pop animation, which left the list
     /// visible without its bar for a beat.
     private var hidesTabBar: Bool {
-        if case .thread = path.last { return true }
-        return false
+        switch path.last {
+        case .thread, .linkedThread:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Links inside posts point back at stage1st. Opening them in place keeps the
+    /// reader in the app; anything else still goes to the system.
+    private var linkHandler: OpenURLAction {
+        OpenURLAction { url in
+            guard let destination = Stage1stLink.destination(for: url) else {
+                return .systemAction
+            }
+            tab = 0
+            switch destination {
+            case .thread(let tid, let pid):
+                path.append(Route.linkedThread(tid: tid, pid: pid))
+            case .forum(let fid):
+                path.append(Route.linkedForum(fid: fid))
+            }
+            return .handled
+        }
     }
 
     var body: some View {
@@ -27,6 +49,10 @@ struct RootView: View {
                             ThreadListView(forum: forum)
                         case .thread(let summary):
                             ThreadDetailView(summary: summary)
+                        case .linkedThread(let tid, let pid):
+                            LinkedThreadView(tid: tid, pid: pid)
+                        case .linkedForum(let fid):
+                            LinkedForumView(fid: fid)
                         }
                     }
             }
@@ -41,6 +67,7 @@ struct RootView: View {
             .tag(1)
         }
         .modifier(SidebarAdaptableTabs())
+        .environment(\.openURL, linkHandler)
         .task {
             await model.loadIfNeeded()
             #if DEBUG
@@ -72,7 +99,15 @@ struct RootView: View {
                 path.append(.forum(forum))
             }
         case "thread":
-            path.append(.thread(ThreadSummary(tid: parts[1], subject: "加载中…")))
+            path.append(.linkedThread(tid: parts[1], pid: nil))
+        case "link":
+            guard let url = URL(string: parts[1]), let destination = Stage1stLink.destination(for: url) else { return }
+            switch destination {
+            case .thread(let tid, let pid):
+                path.append(.linkedThread(tid: tid, pid: pid))
+            case .forum(let fid):
+                path.append(.linkedForum(fid: fid))
+            }
         default:
             break
         }
@@ -104,6 +139,9 @@ struct RootView: View {
 enum Route: Hashable {
     case forum(Forum)
     case thread(ThreadSummary)
+    /// Reached through a link, where all we know is the id.
+    case linkedThread(tid: String, pid: String?)
+    case linkedForum(fid: String)
 }
 
 #Preview {
