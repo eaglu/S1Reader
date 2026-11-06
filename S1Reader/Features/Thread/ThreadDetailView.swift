@@ -1024,6 +1024,9 @@ extension ThreadDetailView {
                 print("S1_PERF imageURLs posts=\(htmls.count) scan=\(String(format: "%.1f", fast))ms fullParse=\(String(format: "%.1f", slow))ms")
             }
             #endif
+            // Reserve the right height for every picture on the page now, so
+            // scrolling over them never reflows the list.
+            await ImageLoader.shared.prefetchAspects(for: urls)
             ImageCacheIndex.shared.register(tid: tid, title: title, urls: urls)
             threadImageURLs = urls
             threadImageCount = ImageCacheIndex.shared.urls(for: tid).count

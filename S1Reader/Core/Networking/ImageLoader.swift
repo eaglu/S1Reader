@@ -63,6 +63,25 @@ actor ImageLoader {
         return aspect
     }
 
+    /// Learns the aspect ratios of a whole page's pictures before any of them is
+    /// on screen. Only the first 64KB of each file is fetched, so the rows can be
+    /// laid out at their final height and scrolling no longer reflows.
+    func prefetchAspects(for urls: [URL]) async {
+        let unknown = await MainActor.run { urls.filter { ImageAspectStore.shared.aspect(for: $0) == nil } }
+        guard !unknown.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            var iterator = unknown.makeIterator()
+            for _ in 0..<min(4, unknown.count) {
+                guard let url = iterator.next() else { break }
+                group.addTask { _ = await self.aspectRatio(for: url) }
+            }
+            while await group.next() != nil {
+                guard let url = iterator.next() else { continue }
+                group.addTask { _ = await self.aspectRatio(for: url) }
+            }
+        }
+    }
+
     /// Reads the pixel size straight out of the (partial) image bytes.
     private static func aspectRatio(from data: Data) -> CGFloat? {
         guard let source = CGImageSourceCreateIncremental(nil as CFDictionary?) as CGImageSource? else { return nil }
@@ -176,14 +195,11 @@ struct RemoteImage: View {
                 placeholder
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: image == nil ? maxHeight : nil)
+        .frame(maxWidth: .infinity, maxHeight: maxHeight)
         // Pictures arrive at different moments; a short fade keeps them from
         // popping in mid-scroll.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: image == nil)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: didFail)
-        // Reserved space follows the real ratio once the peek answers, so the
-        // list settles instead of snapping when the picture lands.
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: aspect)
         .visibleInScroll { visible in
             isOnScreen = visible
             if visible { load() }
@@ -207,8 +223,14 @@ struct RemoteImage: View {
     private var placeholder: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(Color(uiColor: .tertiarySystemFill))
-            .aspectRatio(aspect ?? 4.0 / 3.0, contentMode: .fit)
+            .aspectRatio(reservedAspect, contentMode: .fit)
             .overlay(ProgressView())
+    }
+
+    /// Read straight from the store so the very first layout already has the
+    /// right height: adjusting it a beat later is what made scrolling up jump.
+    private var reservedAspect: CGFloat {
+        aspect ?? ImageAspectStore.shared.aspect(for: url) ?? 4.0 / 3.0
     }
 
     /// Fetches only once the picture is actually on screen; pictures that were
