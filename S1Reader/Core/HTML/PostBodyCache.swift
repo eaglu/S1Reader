@@ -28,11 +28,26 @@ actor PostBodyCache {
     #endif
 
     private func key(pid: String, scale: CGFloat) -> NSString {
-        "\(pid)@\(scale)" as NSString
+        PostBodyCache.cacheKey(pid: pid, scale: scale) as NSString
+    }
+
+    /// Cache key, shared with `PostNodeMirror` so both stores agree.
+    nonisolated static func cacheKey(pid: String, scale: CGFloat) -> String {
+        "\(pid)@\(scale)"
     }
 
     /// Returns the parsed nodes, parsing off the caller's thread on a miss.
+    /// Every result is also published to the main-actor mirror, so the *next*
+    /// row built for this post can draw it synchronously.
     func nodes(pid: String, html: String, scale: CGFloat) async -> [PostNode] {
+        let nodes = await parseIfNeeded(pid: pid, html: html, scale: scale)
+        await MainActor.run {
+            PostNodeMirror.shared.store(nodes, pid: pid, scale: scale)
+        }
+        return nodes
+    }
+
+    private func parseIfNeeded(pid: String, html: String, scale: CGFloat) async -> [PostNode] {
         let key = key(pid: pid, scale: scale)
         if let cached = cache.object(forKey: key) { return cached.nodes }
         if let running = inflight[key] {
@@ -64,6 +79,7 @@ actor PostBodyCache {
     func removeAll() {
         cache.removeAllObjects()
         inflight.removeAll()
+        Task { @MainActor in PostNodeMirror.shared.removeAll() }
     }
 
     private static func parseMeasured(html: String, scale: CGFloat) -> [PostNode] {
@@ -115,4 +131,44 @@ actor PostBodyCache {
         print("S1_PERF \(label) parses=\(count) total=\(String(format: "%.1f", millis))ms avg=\(average)ms")
     }
     #endif
+}
+
+/// Main-actor copy of the parsed bodies, so a rebuilt row can draw its final
+/// content in its *first* layout pass.
+///
+/// `LazyVStack` throws a row's `@State` away when it scrolls out and builds a
+/// fresh one on the way back. Fetching the cached nodes from the actor takes at
+/// least one frame, and in that frame the row would be a one-line skeleton: every
+/// rebuilt row *above* the viewport collapsed to nothing and then grew back,
+/// which is what shoved the reply being read down the screen while scrolling up.
+/// Reading the mirror is synchronous, so the row is never laid out at the wrong
+/// height in the first place.
+@MainActor
+final class PostNodeMirror {
+    static let shared = PostNodeMirror()
+
+    private var bodies: [String: [PostNode]] = [:]
+    /// Keys in arrival order, so eviction drops the oldest body instead of a
+    /// random slice of the dictionary.
+    private var order: [String] = []
+    private let limit = 400
+
+    func nodes(pid: String, scale: CGFloat) -> [PostNode]? {
+        bodies[PostBodyCache.cacheKey(pid: pid, scale: scale)]
+    }
+
+    func store(_ nodes: [PostNode], pid: String, scale: CGFloat) {
+        let key = PostBodyCache.cacheKey(pid: pid, scale: scale)
+        if bodies.updateValue(nodes, forKey: key) == nil {
+            order.append(key)
+            while order.count > limit {
+                bodies.removeValue(forKey: order.removeFirst())
+            }
+        }
+    }
+
+    func removeAll() {
+        bodies.removeAll()
+        order.removeAll()
+    }
 }

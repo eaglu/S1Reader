@@ -10,17 +10,32 @@ struct PostRowView: View {
     var zoomNamespace: Namespace.ID?
 
     @State private var nodes: [PostNode] = []
+    /// True once this row has parsed the body itself (cache hit or fresh parse),
+    /// so "no nodes" can be told apart from "not parsed yet".
+    @State private var didParse = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// The body to draw. A row that `LazyVStack` just rebuilt has empty `@State`,
+    /// so it reads the parsed body straight out of the mirror instead of waiting
+    /// a frame for the actor: a row above the viewport that starts out one line
+    /// tall and then grows shoves the reply being read down the screen.
+    private var shownNodes: [PostNode] {
+        if didParse { return nodes }
+        return PostNodeMirror.shared.nodes(
+            pid: post.pid,
+            scale: HTMLParser.textScale(for: dynamicTypeSize)
+        ) ?? []
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            if nodes.isEmpty && !post.message.isEmpty {
+            if shownNodes.isEmpty && !post.message.isEmpty {
                 Text(" ")
                     .redacted(reason: .placeholder)
             } else {
                 PostContentView(
-                    nodes: nodes,
+                    nodes: shownNodes,
                     onImageTap: onImageTap,
                     onQuoteTap: onQuoteTap,
                     zoomNamespace: zoomNamespace
@@ -34,11 +49,17 @@ struct PostRowView: View {
         // Re-parse when the reader changes the system text size so the body
         // follows Dynamic Type instead of staying at Discuz's fixed sizes.
         .task(id: "\(post.pid)-\(dynamicTypeSize)") {
-            nodes = await PostBodyCache.shared.nodes(
+            let parsed = await PostBodyCache.shared.nodes(
                 pid: post.pid,
                 html: post.message,
                 scale: HTMLParser.textScale(for: dynamicTypeSize)
             )
+            // Always fill `nodes` itself: once `didParse` flips, the body stops
+            // reading the mirror, and a mirror hit that skipped this assignment
+            // would leave the row blank. Assigning the same body again is a no-op
+            // for layout, so the row is still not laid out twice.
+            if nodes != parsed { nodes = parsed }
+            didParse = true
         }
     }
 
@@ -129,7 +150,10 @@ struct PostContentView: View {
                 pieces.append(Text(attributed))
             case .image(let url, let isSmiley):
                 if isSmiley {
-                    if let image = smileys[url] {
+                    // Bundled smileys resolve synchronously, so a rebuilt row lays
+                    // its text out at the final line count on the first pass. Only
+                    // a smiley this build does not carry arrives a frame later.
+                    if let image = smileys[url] ?? Self.smiley(for: url) {
                         pieces.append(Text(Image(uiImage: image)))
                     }
                 } else {
