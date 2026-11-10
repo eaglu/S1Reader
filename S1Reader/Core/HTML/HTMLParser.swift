@@ -56,7 +56,11 @@ enum HTMLParser {
             case .text(let value):
                 text += String(value.characters)
             case .quote(let value, _):
+                // A quote is its own block in the reader, so it needs a line of
+                // its own here too; otherwise "引用正文" glues the two together.
+                if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
                 text += String(value.characters)
+                text += "\n"
             case .image:
                 continue
             }
@@ -84,40 +88,103 @@ enum HTMLParser {
     }
 
     /// Non-smiley images referenced by a post, used for cache bookkeeping.
-    /// Pulls the post images out of the markup without parsing it.
+    /// Pulls the post images out of the markup without building attributed
+    /// strings.
     ///
-    /// The full parser builds attributed strings and tracks styles; for a thread
-    /// worth of posts that is a lot of work to answer "which images".
+    /// The full parser is a lot of work to answer "which images", but the answer
+    /// has to match what the parser renders: a URL the renderer shows and this
+    /// function misses keeps a guessed aspect ratio, and the row re-sizes when the
+    /// picture lands. So it applies the same rules in the same order (attachment
+    /// attributes before `src`, placeholders dropped, quotes skipped) over a
+    /// shared tag scan.
     static func imageURLs(in html: String) -> [URL] {
         guard html.contains("<img") else { return [] }
         var urls: [URL] = []
         var seen = Set<String>()
-        let range = NSRange(html.startIndex..<html.endIndex, in: html)
-        for match in imgTagRegex.matches(in: html, range: range) {
-            guard let tagRange = Range(match.range, in: html) else { continue }
-            let tag = html[tagRange]
-            guard let src = attribute("src", in: tag) else { continue }
-            let urlString = decodeEntities(src)
-            if urlString.contains("/smiley/") || urlString.contains("/smilies/") { continue }
-            guard let url = URL(string: urlString), seen.insert(url.absoluteString).inserted else { continue }
-            urls.append(url)
+        var divDepth = 0
+        var quoteDivDepths: [Int] = []
+        var blockquoteDepth = 0
+
+        for tag in tags(in: html) {
+            switch tag.name {
+            case "blockquote":
+                blockquoteDepth = max(0, blockquoteDepth + (tag.isClosing ? -1 : 1))
+            case "div":
+                if tag.isClosing {
+                    if quoteDivDepths.last == divDepth { quoteDivDepths.removeLast() }
+                    divDepth = max(0, divDepth - 1)
+                } else {
+                    divDepth += 1
+                    let classes = tag.attributes["class"]?.lowercased() ?? ""
+                    if classes.contains("reply_wrap") || classes.contains("quote") {
+                        quoteDivDepths.append(divDepth)
+                    }
+                }
+            case "img":
+                guard !tag.isClosing, quoteDivDepths.isEmpty, blockquoteDepth == 0 else { continue }
+                guard let urlString = imageSource(in: tag.attributes), let url = resolveURL(urlString) else { continue }
+                guard seen.insert(url.absoluteString).inserted else { continue }
+                urls.append(url)
+            default:
+                continue
+            }
         }
         return urls
     }
 
-    /// Compiled once: building an `NSRegularExpression` per image tag dominated
-    /// the first scan of a page.
-    private static let imgTagRegex = try! NSRegularExpression(pattern: "<img[^>]*>", options: [.caseInsensitive])
+    /// The URL an `<img>` should show: Discuz keeps the full picture in `file` /
+    /// `zoomfile` and only a thumbnail (or a loading placeholder) in `src`.
+    fileprivate static func imageSource(in attributes: [String: String]) -> String? {
+        let candidate = attributes["file"]
+            ?? attributes["zoomfile"]
+            ?? attributes["data-src"]
+            ?? attributes["data-original"]
+            ?? attributes["src"]
+            ?? ""
+        let decoded = decodeEntities(candidate).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !decoded.isEmpty, !isPlaceholderImage(decoded) else { return nil }
+        return decoded
+    }
 
-    private static func attribute(_ name: String, in tag: Substring) -> String? {
-        var rest = tag[tag.startIndex...]
-        guard let nameRange = rest.range(of: name, options: [.caseInsensitive]) else { return nil }
-        rest = rest[nameRange.upperBound...]
-        guard let quoteStart = rest.firstIndex(where: { $0 == "\"" || $0 == "'" }) else { return nil }
-        let quote = rest[quoteStart]
-        let afterQuote = rest[rest.index(after: quoteStart)...]
-        guard let end = afterQuote.firstIndex(of: quote) else { return nil }
-        return String(afterQuote[..<end])
+    fileprivate static func isPlaceholderImage(_ raw: String) -> Bool {
+        raw.hasPrefix("static/image/common/none")
+            || raw.contains("/common/loading.gif")
+            || raw.contains("/common/none.gif")
+    }
+
+    /// One tag at a time, sharing the tokenizer rules with the body builder: a
+    /// bare `<` in prose is text, not the start of a tag.
+    fileprivate struct Tag {
+        let name: String
+        let attributes: [String: String]
+        let isClosing: Bool
+    }
+
+    fileprivate static func tags(in html: String) -> [Tag] {
+        var result: [Tag] = []
+        var index = html.startIndex
+        while let tagStart = html[index...].firstIndex(of: "<") {
+            let afterBracket = html.index(after: tagStart)
+            guard afterBracket < html.endIndex else { break }
+            let follower = html[afterBracket]
+            guard follower == "/" || follower == "!" || follower == "?" || follower.isLetter else {
+                index = afterBracket
+                continue
+            }
+            guard let tagEnd = html[tagStart...].firstIndex(of: ">") else { break }
+            let body = html[html.index(after: tagStart)..<tagEnd]
+            index = html.index(after: tagEnd)
+
+            var text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isClosing = text.hasPrefix("/")
+            if isClosing { text.removeFirst() }
+            if text.hasSuffix("/") { text.removeLast() }
+            let pieces = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard let name = pieces.first?.lowercased(), !name.isEmpty else { continue }
+            let attributes = pieces.count > 1 ? parseAttributes(String(pieces[1])) : [:]
+            result.append(Tag(name: name, attributes: attributes, isClosing: isClosing))
+        }
+        return result
     }
 
     // MARK: - Text attributes
@@ -187,7 +254,7 @@ enum HTMLParser {
         return String(style[valueRange]).trimmingCharacters(in: .whitespaces)
     }
 
-    fileprivate static func fontPointSize(for discuzSize: Int) -> CGFloat {
+    static func fontPointSize(for discuzSize: Int) -> CGFloat {
         switch discuzSize {
         case 1: return 12
         case 2: return 14
@@ -303,6 +370,20 @@ private struct PostBuilder {
             if tagStart > index {
                 append(HTMLParser.decodeEntities(String(html[index..<tagStart])))
             }
+            let afterBracket = html.index(after: tagStart)
+            guard afterBracket < html.endIndex else {
+                index = afterBracket
+                append("<")
+                break
+            }
+            // A bare "<" is ordinary prose on a tech forum ("a < b", "价格<100").
+            // Treating it as a tag would eat everything up to the next ">".
+            let follower = html[afterBracket]
+            guard follower == "/" || follower == "!" || follower == "?" || follower.isLetter else {
+                index = afterBracket
+                append("<")
+                continue
+            }
             guard let tagEnd = html[tagStart...].firstIndex(of: ">") else { break }
             let rawTag = String(html[html.index(after: tagStart)..<tagEnd])
             index = html.index(after: tagEnd)
@@ -337,7 +418,10 @@ private struct PostBuilder {
 
         switch name {
         case "script", "style":
-            if !isClosing { skipping = name }
+            if !isClosing {
+                skipping = name
+                skipBody(of: name)
+            }
         case "br":
             append("\n")
         case "p", "div", "tr", "li", "blockquote":
@@ -347,6 +431,23 @@ private struct PostBuilder {
         default:
             handleInline(name, attributes: attributes, isClosing: isClosing)
         }
+    }
+
+    /// Jumps to the closing tag: a script body may contain "<", which the tag
+    /// scanner would otherwise mistake for markup and swallow the rest of the post.
+    private mutating func skipBody(of name: String) {
+        guard let close = html.range(of: "</" + name, options: .caseInsensitive, range: index..<html.endIndex) else {
+            index = html.endIndex
+            return
+        }
+        index = close.lowerBound
+    }
+
+    /// A block boundary. Unlike `<br>` these do not stack: "</p><p>" is one line
+    /// break, not a blank line.
+    private mutating func blockBreak() {
+        pendingNewlines = max(pendingNewlines, 1)
+        atLineStart = true
     }
 
     private mutating func handleBlock(
@@ -361,7 +462,7 @@ private struct PostBuilder {
         case "div":
             handleDiv(attributes: attributes, isClosing: isClosing, selfClosing: selfClosing)
         default:
-            if isClosing || !selfClosing { append("\n") }
+            if isClosing || !selfClosing { blockBreak() }
         }
     }
 
@@ -377,7 +478,7 @@ private struct PostBuilder {
                 quoteDivDepths.removeLast()
                 closeQuote()
             } else {
-                append("\n")
+                blockBreak()
             }
             divDepth = max(0, divDepth - 1)
             return
@@ -389,7 +490,7 @@ private struct PostBuilder {
             quoteDivDepths.append(divDepth)
             openQuote()
         } else {
-            append("\n")
+            blockBreak()
         }
     }
 
@@ -477,6 +578,9 @@ private struct PostBuilder {
 
     private mutating func flush() {
         var copy = text
+        while let first = copy.characters.first, first == "\n" || first == " " {
+            copy.removeSubrange(copy.startIndex..<copy.index(copy.startIndex, offsetByCharacters: 1))
+        }
         while let last = copy.characters.last, last == "\n" || last == " " {
             copy.removeSubrange(copy.index(copy.endIndex, offsetByCharacters: -1)..<copy.endIndex)
         }
@@ -503,6 +607,12 @@ private struct PostBuilder {
         popTag("quote")
         quoteDepth = max(0, quoteDepth - 1)
         emitQuoteBuffer(force: false)
+        if quoteDepth == 0 {
+            // Breaks inside the quote belong to the quote; they must not prepend a
+            // blank line to the reply text that follows.
+            pendingNewlines = 0
+            atLineStart = true
+        }
     }
 
     private mutating func emitQuoteBuffer(force: Bool) {
@@ -526,9 +636,7 @@ private struct PostBuilder {
         // Images inside a quote are dropped: the quote renders as one text card,
         // and the original picture is one tap away.
         guard quoteBuffer == nil else { return }
-        let candidate = attributes["file"] ?? attributes["zoomfile"] ?? attributes["src"] ?? ""
-        let decoded = HTMLParser.decodeEntities(candidate).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !decoded.isEmpty, !decoded.hasPrefix("static/image/common/none"),
+        guard let decoded = HTMLParser.imageSource(in: attributes),
               let url = HTMLParser.resolveURL(decoded) else { return }
         flush()
         nodes.append(.image(url, isSmiley: HTMLParser.isSmiley(url)))

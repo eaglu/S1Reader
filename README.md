@@ -46,6 +46,27 @@ xcodebuild -project S1Reader.xcodeproj -scheme S1Reader \
   -destination 'platform=iOS Simulator,name=iPhone 17' build
 ```
 
+## 测试
+
+单元测试在 `S1ReaderTests/`（Swift Testing 之前的 XCTest，随 `S1Reader` scheme 一起构建）：
+
+```bash
+./scripts/test.sh                                        # 自动挑一台 iPhone 模拟器
+./scripts/test.sh -only-testing:S1ReaderTests/HTMLTextTests   # 只跑一个文件
+./scripts/test.sh --ui                                   # 界面冒烟测试（需要联网）
+TEST_DESTINATION='platform=iOS Simulator,name=iPhone 17' ./scripts/test.sh
+```
+
+脚本优先用已经启动的模拟器，不会为了跑测试再开一台。
+
+覆盖的是不依赖网络的那一层：`HTMLParser` 的富文本/引用/图片/笑脸解析、`Stage1stLink` 的站内链接识别、各个 Codable 模型对 Discuz「字符串还是数字」的兼容、UserDefaults 存储（阅读进度、新回复、图片比例、访客回退）、`PostBodyCache` 与 `PostNodeMirror` 的缓存命中与淘汰。所有用例都不发请求、不读写真实 App 容器（`TemporaryDefaults` 给每个用例一个独立 suite），因此可以离线跑、可以并行。
+
+回归测试是照着真实 bug 写的：`<` 当纯文本、`<script>` 里带 `<` 吞掉后文、`</p><p>` 多出一个空行、引用块后的正文以空行开头、`evilstage1st.com` 被当成站内链接、数字型 `newprompt` 解不出红点、只有日期的 `2024-11-12` 解析失败、`imageURLs` 只读 `src` 导致附件图没预取（比例未定 → 行高二次变化）。CI 的 `Test (simulator)` job 跑同一份脚本。
+
+### 界面冒烟测试
+
+`S1ReaderUITests/` 走 `S1ReaderUI` scheme（不在默认 scheme 里，不会拖慢单元测试）：启动 App → 点开一个版块 → 点开一个主题，检查各层正文确实渲染成了文字（`postBody-<pid>`）而不是骨架条（`postPlaceholder-<pid>`），再上滑六屏确认滚动出来的行也不是骨架条。版块正文那条断言就是当初“只显示灰色条”那个回归的形状。没网时用例以 `XCTSkip` 跳过，不会把 CI 拖红；截图作为附件留在 xcresult 里。
+
 ## 项目结构
 
 ```
@@ -61,6 +82,7 @@ S1Reader/
     ├── Threads/         主题列表
     ├── Thread/          帖子详情、楼层渲染、回复、跳页
     └── Account/         登录、提醒、收藏夹
+S1ReaderTests/           单元测试（解析 / 解码 / 存储 / 缓存）
 ```
 
 ## 数据来源

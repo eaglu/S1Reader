@@ -50,3 +50,35 @@ jobs:
           name: build-log
           path: build.log
           if-no-files-found: ignore
+
+  test:
+    name: Test (simulator)
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        run: |
+          for candidate in /Applications/Xcode_27.2.app /Applications/Xcode_27.1.app /Applications/Xcode_27.app; do
+            if [ -d "$candidate" ]; then sudo xcode-select -s "$candidate"; break; fi
+          done
+          xcodebuild -version
+
+      - name: Unit tests
+        run: DERIVED_DATA=build-test TEST_LOG=test.log ./scripts/test.sh
+
+      # Opens a real thread on a simulator. Needs the network: without it the
+      # cases skip themselves instead of failing.
+      - name: UI smoke tests
+        run: DERIVED_DATA=build-test TEST_LOG=ui-test.log ./scripts/test.sh --ui
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: |
+            test.log
+            ui-test.log
+          if-no-files-found: ignore

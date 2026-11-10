@@ -11,11 +11,20 @@ final class GuestFallbackStore {
     private let key = "{{SECRET_9t5yf6bd}}"
     private let limit = 200
     private let defaults: UserDefaults
+    /// Insertion order, oldest first. A `Set` alone loses it, and evicting by
+    /// arbitrary set order can drop the thread that was just marked.
+    private var order: [String]
     private var tids: Set<String>
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.tids = Set(defaults.stringArray(forKey: key) ?? [])
+        var loaded: [String] = []
+        var seen: Set<String> = []
+        for tid in defaults.stringArray(forKey: key) ?? [] where seen.insert(tid).inserted {
+            loaded.append(tid)
+        }
+        self.order = loaded
+        self.tids = seen
     }
 
     var count: Int { tids.count }
@@ -26,26 +35,28 @@ final class GuestFallbackStore {
 
     func mark(_ tid: String) {
         guard tids.insert(tid).inserted else { return }
+        order.append(tid)
         persist()
     }
 
     func unmark(_ tid: String) {
         guard tids.remove(tid) != nil else { return }
+        order.removeAll { $0 == tid }
         persist()
     }
 
     func clear() {
         guard !tids.isEmpty else { return }
         tids.removeAll()
+        order.removeAll()
         persist()
     }
 
     private func persist() {
-        var list = Array(tids)
-        if list.count > limit {
-            list = Array(list.suffix(limit))
-            tids = Set(list)
+        if order.count > limit {
+            order.removeFirst(order.count - limit)
+            tids = Set(order)
         }
-        defaults.set(list, forKey: key)
+        defaults.set(order, forKey: key)
     }
 }

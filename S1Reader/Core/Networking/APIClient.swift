@@ -451,7 +451,9 @@ actor APIClient {
         }
     }
 
-    private static func formEncode(_ fields: [String: String]) -> Data {
+    /// Exposed for tests: the body must survive keys and values with spaces,
+    /// ampersands, plus signs and Chinese text.
+    static func formEncode(_ fields: [String: String]) -> Data {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         let body = fields

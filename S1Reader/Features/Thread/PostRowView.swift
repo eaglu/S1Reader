@@ -33,6 +33,7 @@ struct PostRowView: View {
             if shownNodes.isEmpty && !post.message.isEmpty {
                 Text(" ")
                     .redacted(reason: .placeholder)
+                    .accessibilityIdentifier("postPlaceholder-\(post.pid)")
             } else {
                 PostContentView(
                     nodes: shownNodes,
@@ -40,6 +41,9 @@ struct PostRowView: View {
                     onQuoteTap: onQuoteTap,
                     zoomNamespace: zoomNamespace
                 )
+                    // The UI test looks for this to prove a floor rendered text and
+                    // not the grey placeholder bar.
+                    .accessibilityIdentifier("postBody-\(post.pid)")
                     .contextMenu { menu }
             }
         }

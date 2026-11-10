@@ -11,13 +11,16 @@ struct ReadingPosition: Codable, Sendable {
 final class ReadingProgressStore {
     static let shared = ReadingProgressStore()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let storageKey = "s1.readingPositions"
     private let maxEntries = 300
 
     private var cache: [String: ReadingPosition]
 
-    private init() {
+    /// `defaults` is injectable so a test can use its own suite instead of the
+    /// app's real store.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         cache = Self.decode(defaults.data(forKey: storageKey))
     }
 

@@ -9,6 +9,9 @@ extension KeyedDecodingContainer {
 
     func flexStringOptional(_ key: Key) -> String? {
         if let value = try? decode(String.self, forKey: key) { return value }
+        // JSON booleans are a real answer too: "first": true on a floor that is
+        // not otherwise numbered.
+        if let value = try? decode(Bool.self, forKey: key) { return value ? "1" : "0" }
         if let value = try? decode(Int.self, forKey: key) { return String(value) }
         if let value = try? decode(Double.self, forKey: key) {
             return String(Int(value))
@@ -47,8 +50,20 @@ enum Formatters {
         return formatter
     }()
 
+    /// Discuz prints dates without a time in thread lists ("2024-11-12"), so
+    /// both shapes have to parse.
+    static let dateOnly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
     static func date(from string: String) -> Date? {
-        serverDate.date(from: string)
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return serverDate.date(from: trimmed) ?? dateOnly.date(from: trimmed)
     }
 
     /// "2024-11-12 19:01" -> "刚刚" / "3 小时前" / "11月12日"

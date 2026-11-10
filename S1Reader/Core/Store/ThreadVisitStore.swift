@@ -41,14 +41,17 @@ final class ThreadVisitStore {
         return max(0, replies - seen.replies)
     }
 
+    /// What was recorded the last time this thread was opened; `nil` when it
+    /// never was.
+    func seen(tid: String) -> Seen? { entries[tid] }
+
     /// Records the current reply count as read.
-    func markSeen(tid: String, replies: Int) {
-        let current = max(0, replies)
-        if let seen = entries[tid], seen.replies == current {
-            entries[tid] = Seen(replies: current, date: Date())
-            return
-        }
-        entries[tid] = Seen(replies: current, date: Date())
+    ///
+    /// Always persists: re-reading a thread with no new replies must still move
+    /// its date, otherwise pruning treats the thread you just read as the oldest
+    /// one and throws it away.
+    func markSeen(tid: String, replies: Int, at date: Date = Date()) {
+        entries[tid] = Seen(replies: max(0, replies), date: date)
         prune()
         persist()
     }

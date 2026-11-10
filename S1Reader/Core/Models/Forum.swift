@@ -43,7 +43,7 @@ struct Member: Decodable, Equatable, Sendable {
             groupTitle = (try? group.decode(String.self, forKey: .title)) ?? ""
         }
         if let notice = try? container.nestedContainer(keyedBy: NoticeKeys.self, forKey: .notice) {
-            unreadNotices = Int((try? notice.decode(String.self, forKey: .prompt)) ?? "0") ?? 0
+            unreadNotices = notice.flexInt(.prompt)
         }
     }
 

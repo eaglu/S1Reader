@@ -11,9 +11,7 @@ enum Stage1stLink {
     private static let hosts = ["stage1st.com", "www.stage1st.com", "bbs.saraba1st.com", "saraba1st.com"]
 
     static func destination(for url: URL) -> Destination? {
-        guard let host = url.host?.lowercased(), hosts.contains(where: { host.hasSuffix($0) }) else {
-            return nil
-        }
+        guard let host = url.host?.lowercased(), isOwnHost(host) else { return nil }
         let query = Self.query(of: url)
         let path = url.path
         let fragment = url.fragment
@@ -45,6 +43,13 @@ enum Stage1stLink {
     }
 
     // MARK: - Parsing details
+
+    /// Exact host or a subdomain of it: a plain suffix test would also accept
+    /// `evilstage1st.com`, and opening a stranger's link in the in-app web view is
+    /// not what tapping a link in a post should do.
+    private static func isOwnHost(_ host: String) -> Bool {
+        hosts.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
 
     private static func query(of url: URL) -> [String: String] {
         guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
