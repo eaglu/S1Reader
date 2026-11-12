@@ -50,28 +50,32 @@ struct LoadEarlierOnOverscroll: ViewModifier {
     /// page or pinning the top moves the offset too, and the jump is not a
     /// request for the page above.
     @State private var isPulling = false
+    /// The latest offset, so a pull can be judged when it starts rather than one
+    /// frame in: after a prepend the list rests above the content, and a pull
+    /// from there must not count as leaving the top.
+    @State private var offset: CGFloat = 0
 
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
             content
                 .onScrollPhaseChange { _, phase in
-                    isPulling = phase == .interacting || phase == .decelerating
+                    let pulling = phase == .interacting || phase == .decelerating
+                    if pulling, !isPulling, offset > gate.reset { gate.rearm() }
+                    isPulling = pulling
                 }
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     geometry.contentOffset.y
-                } action: { _, offset in
+                } action: { _, newOffset in
+                    offset = newOffset
                     guard isEnabled else {
                         // The list has nothing left above it; a later reload that
                         // brings earlier pages back starts from a clean gate.
                         gate.rearm()
                         return
                     }
-                    guard gate.update(offset: offset) else { return }
-                    guard isPulling else {
-                        DebugHooks.log("S1 gate held offset=\(Int(offset)) (not a pull)")
-                        return
-                    }
-                    DebugHooks.log("S1 gate fire offset=\(Int(offset))")
+                    guard isPulling else { return }
+                    guard gate.update(offset: newOffset) else { return }
+                    DebugHooks.log("S1 gate fire offset=\(Int(newOffset))")
                     action()
                 }
         } else {
