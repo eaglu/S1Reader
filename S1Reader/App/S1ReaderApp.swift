@@ -26,6 +26,7 @@ struct S1ReaderApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                .environment(BlockedAuthorsStore.shared)
         }
     }
 }

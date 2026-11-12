@@ -108,6 +108,13 @@ final class ThreadDetailViewModel {
         firstLoadedPage = clamped
     }
 
+    /// Jumps to the newest page of the thread. The page count comes from the
+    /// page the server just returned, so nobody has to type a page number.
+    func jumpToLastPage() async {
+        guard hasLoadedOnce, pageCount > loadedPages else { return }
+        await loadPage(pageCount)
+    }
+
     func loadMore() async {
         guard hasMore else { return }
         guard pager.page < pageCount else {

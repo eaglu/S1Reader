@@ -46,7 +46,12 @@ struct NoticesView: View {
             }
 
             ForEach(vm.notices) { notice in
-                NavigationLink(value: threadSummary(for: notice)) {
+                NavigationLink(
+                    value: Route.linkedThread(
+                        tid: notice.tid,
+                        pid: notice.pid.isEmpty ? nil : notice.pid
+                    )
+                ) {
                     NoticeRow(notice: notice)
                 }
                 .onAppear {
@@ -77,10 +82,6 @@ struct NoticesView: View {
         .task {
             if vm.notices.isEmpty { await vm.load(reset: true) }
         }
-    }
-
-    private func threadSummary(for notice: Notice) -> ThreadSummary {
-        ThreadSummary(tid: notice.tid, subject: notice.note)
     }
 }
 

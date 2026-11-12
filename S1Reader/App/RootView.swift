@@ -13,7 +13,7 @@ struct RootView: View {
     /// visible without its bar for a beat.
     private var hidesTabBar: Bool {
         switch path.last {
-        case .thread, .linkedThread:
+        case .thread, .latestThread, .linkedThread:
             return true
         default:
             return false
@@ -44,15 +44,9 @@ struct RootView: View {
                 BoardListView()
                     .toolbar(hidesTabBar ? .hidden : .visible, for: .tabBar)
                     .navigationDestination(for: Route.self) { route in
-                        switch route {
-                        case .forum(let forum):
-                            ThreadListView(forum: forum)
-                        case .thread(let summary):
-                            ThreadDetailView(summary: summary)
-                        case .linkedThread(let tid, let pid):
-                            LinkedThreadView(tid: tid, pid: pid)
-                        case .linkedForum(let fid):
-                            LinkedForumView(fid: fid)
+                        // "跳到最新页" is a push, so the screen needs the stack.
+                        RouteDestination(route: route) { summary in
+                            path.append(.latestThread(summary))
                         }
                     }
             }
@@ -139,12 +133,38 @@ struct RootView: View {
 enum Route: Hashable {
     case forum(Forum)
     case thread(ThreadSummary)
+    /// A thread opened straight at its newest page ("跳到最新页").
+    case latestThread(ThreadSummary)
     /// Reached through a link, where all we know is the id.
     case linkedThread(tid: String, pid: String?)
     case linkedForum(fid: String)
 }
 
+/// Maps a `Route` to its screen. Shared by the board stack and the account
+/// stack, which only needs the linked-thread cases.
+struct RouteDestination: View {
+    let route: Route
+    /// Called when a list row asks to open a thread at its newest page.
+    var onOpenAtLastPage: ((ThreadSummary) -> Void)?
+
+    var body: some View {
+        switch route {
+        case .forum(let forum):
+            ThreadListView(forum: forum, onOpenAtLastPage: onOpenAtLastPage)
+        case .thread(let summary):
+            ThreadDetailView(summary: summary)
+        case .latestThread(let summary):
+            ThreadDetailView(summary: summary, startAtLastPage: true)
+        case .linkedThread(let tid, let pid):
+            LinkedThreadView(tid: tid, pid: pid)
+        case .linkedForum(let fid):
+            LinkedForumView(fid: fid)
+        }
+    }
+}
+
 #Preview {
     RootView()
         .environment(AppModel())
+        .environment(BlockedAuthorsStore.shared)
 }

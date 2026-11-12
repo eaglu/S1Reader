@@ -2,29 +2,45 @@ import SwiftUI
 
 struct ThreadListView: View {
     let forum: Forum
+    /// Opens a thread at its newest page; nil hides the row action.
+    let onOpenAtLastPage: ((ThreadSummary) -> Void)?
+
+    @Environment(BlockedAuthorsStore.self) private var blocks
 
     @State private var model: ThreadListViewModel
     @State private var showOnlyToday = false
     @State private var query = Self.initialQuery
+    @State private var toast: ToastMessage?
 
     /// `S1_SEARCH=<text>` fills the search field from the command line.
     private static var initialQuery: String {
         DebugHooks.string("S1_SEARCH") ?? ""
     }
 
+    private func toggleBlock(_ thread: ThreadSummary) {
+        let wasBlocked = blocks.isBlocked(thread.authorID)
+        blocks.setBlocked(!wasBlocked, authorID: thread.authorID, name: thread.author)
+        toast = ToastMessage(
+            text: wasBlocked ? "已取消屏蔽 \(thread.author)" : "已屏蔽 \(thread.author)",
+            style: .success
+        )
+    }
+
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    init(forum: Forum) {
+    init(forum: Forum, onOpenAtLastPage: ((ThreadSummary) -> Void)? = nil) {
         self.forum = forum
+        self.onOpenAtLastPage = onOpenAtLastPage
         _model = State(initialValue: ThreadListViewModel(forum: forum))
     }
 
     private var visibleThreads: [ThreadSummary] {
-        let base = showOnlyToday
+        let listed = showOnlyToday
             ? model.threads.filter(\.isPinned) + model.threads.filter { !$0.isPinned && $0.isToday }
             : model.threads
+        let base = listed.filter { !blocks.isBlocked($0.authorID) }
         guard !trimmedQuery.isEmpty else { return base }
         return base.filter {
             $0.subject.localizedStandardContains(trimmedQuery)
@@ -62,6 +78,15 @@ struct ThreadListView: View {
                     ContentUnavailableView("暂无主题", systemImage: "text.bubble")
                 }
                 .listRowBackground(Color.clear)
+            } else if model.errorMessage == nil && visibleThreads.isEmpty && !model.threads.isEmpty {
+                Section {
+                    ContentUnavailableView(
+                        "这里的主题都被屏蔽了",
+                        systemImage: "person.slash",
+                        description: Text("在「我的 › 黑名单」里可以解除屏蔽。")
+                    )
+                }
+                .listRowBackground(Color.clear)
             } else if model.errorMessage == nil && visibleThreads.isEmpty {
                 // Only reachable with the 只看今日新帖 filter on.
                 Section {
@@ -79,6 +104,27 @@ struct ThreadListView: View {
                     ThreadRow(thread: thread)
                 }
                 .listRowSeparator(.visible)
+                .contextMenu {
+                    if let onOpenAtLastPage {
+                        Button {
+                            onOpenAtLastPage(thread)
+                        } label: {
+                            Label("跳到最新页", systemImage: "arrow.down.to.line")
+                        }
+                    }
+                    if blocks.canBlock(thread.authorID) {
+                        Button {
+                            toggleBlock(thread)
+                        } label: {
+                            Label(
+                                blocks.isBlocked(thread.authorID) ? "取消屏蔽此作者" : "屏蔽此作者",
+                                systemImage: blocks.isBlocked(thread.authorID)
+                                    ? "person.badge.plus"
+                                    : "person.slash"
+                            )
+                        }
+                    }
+                }
                 .onAppear {
                     guard thread.tid == visibleThreads.last?.tid else { return }
                     Task { await model.loadMore() }
@@ -101,6 +147,8 @@ struct ThreadListView: View {
         .refreshable { await model.reload() }
         .task { await model.loadIfNeeded() }
         .sensoryFeedback(.selection, trigger: showOnlyToday)
+        .sensoryFeedback(.impact(weight: .light), trigger: blocks.count)
+        .toast($toast)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {

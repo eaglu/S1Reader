@@ -5,10 +5,12 @@ enum AccountRoute: Hashable {
     case notices
     case favorites
     case imageCache
+    case blockedAuthors
 }
 
 struct AccountView: View {
     @Environment(AppModel.self) private var model
+    @Environment(BlockedAuthorsStore.self) private var blocks
     @State private var showLogin = false
     @State private var cacheBytes = 0
     @State private var guestFallbackCount = 0
@@ -108,6 +110,10 @@ struct AccountView: View {
                     }
                 }
                 .disabled(cacheBytes == 0)
+                NavigationLink(value: AccountRoute.blockedAuthors) {
+                    Label("黑名单", systemImage: "person.slash")
+                        .badge(blocks.count)
+                }
                 if guestFallbackCount > 0 {
                     Button("清除接口降级记录（\(guestFallbackCount)）") {
                         GuestFallbackStore.shared.clear()
@@ -161,7 +167,13 @@ struct AccountView: View {
             case .notices: NoticesView()
             case .favorites: FavoritesView()
             case .imageCache: ImageCacheView()
+            case .blockedAuthors: BlockedAuthorsView()
             }
+        }
+        // Notices link to a specific floor, so the account stack resolves the
+        // same Route values the board stack does.
+        .navigationDestination(for: Route.self) { route in
+            RouteDestination(route: route, onOpenAtLastPage: nil)
         }
         .task {
             await model.refreshMember()

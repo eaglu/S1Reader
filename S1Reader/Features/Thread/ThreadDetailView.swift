@@ -5,14 +5,16 @@ struct ThreadDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var mainDynamicTypeSize
+    @Environment(BlockedAuthorsStore.self) private var blocks
     @State private var model: ThreadDetailViewModel
     @State private var viewerIndex: Int?
     /// Which picture the reader tapped, so the viewer can grow out of it.
     @State private var zoomSourceID: String?
     @State private var threadImageURLs: [URL] = []
-    @State private var showComposer = false
-    @State private var showLogin = false
-    @State private var showPageJump = false
+    /// One slot for every sheet this screen opens: they are never shown at the
+    /// same time, and one slot keeps SwiftUI from arbitrating four `.sheet`
+    /// modifiers on the same view.
+    @State private var sheet: Sheet?
     @State private var onlyOriginalPoster = false
     @State private var isFavorite = false
     @State private var visiblePid: String?
@@ -37,6 +39,30 @@ struct ThreadDetailView: View {
     /// cannot be mistaken for the reader pulling the list.
     @State private var ignoreOverscrollUntil = Date.distantPast
 
+    /// What the single sheet slot is showing.
+    private enum Sheet: Identifiable {
+        case pageJump
+        case composer
+        case login
+        case author(AuthorProfile)
+
+        var id: String {
+            switch self {
+            case .pageJump: "pageJump"
+            case .composer: "composer"
+            case .login: "login"
+            case .author(let profile): "author-\(profile.authorID)"
+            }
+        }
+    }
+
+    /// Who the author profile sheet is about.
+    struct AuthorProfile: Identifiable {
+        let authorID: String
+        let name: String
+        var id: String { authorID }
+    }
+
     private enum Marker {
         /// Never equal to a real anchor, so the first approach always loads.
         static let none = "\u{0}"
@@ -54,9 +80,12 @@ struct ThreadDetailView: View {
 
     /// When a post links to another thread, the link usually points at a floor too.
     private let initialFocusPid: String?
+    /// Opens the thread at its newest page instead of the first one.
+    private let startAtLastPage: Bool
 
-    init(summary: ThreadSummary, focusPid: String? = nil) {
+    init(summary: ThreadSummary, focusPid: String? = nil, startAtLastPage: Bool = false) {
         self.initialFocusPid = focusPid
+        self.startAtLastPage = startAtLastPage
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
     }
 
@@ -81,20 +110,30 @@ struct ThreadDetailView: View {
         }
         .task {
             await model.loadIfNeeded()
-            // Hiding the list until the restored post is scrolled into place keeps
-            // the reader from seeing the top of the thread flash by first.
-            let hasSavedPosition = ReadingProgressStore.shared.position(for: model.summary.tid) != nil
-            if hasSavedPosition { isRestoringPosition = true }
-            await model.restoreReadingPosition()
-            didRestorePosition = true
-            if let pid = model.resumePid {
-                model.resumePid = nil
-                try? await Task.sleep(for: .milliseconds(250))
-                visiblePid = pid
-            }
-            if hasSavedPosition {
-                try? await Task.sleep(for: .milliseconds(120))
+            if startAtLastPage {
+                // Page one has to load first either way: only the server's answer
+                // says how many pages there are.
+                isRestoringPosition = true
+                await model.jumpToLastPage()
+                didRestorePosition = true
+                if let pid = model.posts.last?.pid { visiblePid = pid }
                 isRestoringPosition = false
+            } else {
+                // Hiding the list until the restored post is scrolled into place keeps
+                // the reader from seeing the top of the thread flash by first.
+                let hasSavedPosition = ReadingProgressStore.shared.position(for: model.summary.tid) != nil
+                if hasSavedPosition { isRestoringPosition = true }
+                await model.restoreReadingPosition()
+                didRestorePosition = true
+                if let pid = model.resumePid {
+                    model.resumePid = nil
+                    try? await Task.sleep(for: .milliseconds(250))
+                    visiblePid = pid
+                }
+                if hasSavedPosition {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    isRestoringPosition = false
+                }
             }
             // A link from another post may point at a specific floor.
             if let pid = initialFocusPid {
@@ -123,10 +162,16 @@ struct ThreadDetailView: View {
         }
         .sensoryFeedback(.impact(weight: .light), trigger: isFavorite)
         .sensoryFeedback(.selection, trigger: onlyOriginalPoster)
+        .sensoryFeedback(.impact(weight: .light), trigger: blocks.count)
         .toast($toast)
-        .sheet(isPresented: $showPageJump) { pageJumpSheet }
-        .sheet(isPresented: $showComposer) { composerSheet }
-        .sheet(isPresented: $showLogin) { LoginView() }
+        .sheet(item: $sheet) { sheet in
+            switch sheet {
+            case .pageJump: pageJumpSheet
+            case .composer: composerSheet
+            case .login: LoginView()
+            case .author(let profile): authorSheet(profile)
+            }
+        }
         .fullScreenCover(isPresented: isShowingViewer) {
             ImageBrowser(urls: threadImageURLs, index: viewerIndexBinding)
                 .zoomPresentation(id: zoomSourceID, in: imageZoom)
@@ -169,7 +214,13 @@ struct ThreadDetailView: View {
             }
             Section {
                 Button {
-                    showPageJump = true
+                    Task { await model.jumpToLastPage() }
+                } label: {
+                    Label("跳到最新页", systemImage: "arrow.down.to.line")
+                }
+                .disabled(model.loadedPages >= model.pageCount)
+                Button {
+                    sheet = .pageJump
                 } label: {
                     Label("跳到指定页（共 \(model.pageCount) 页）", systemImage: "number")
                 }
@@ -214,7 +265,15 @@ extension ThreadDetailView {
                     title: model.title,
                     author: model.summary.author,
                     posts: model.totalPosts,
-                    views: model.views
+                    views: model.views,
+                    onAuthorTap: {
+                        sheet = .author(
+                            AuthorProfile(
+                                authorID: model.summary.authorID,
+                                name: model.summary.author
+                            )
+                        )
+                    }
                 )
 
                 if let error = model.errorMessage, model.posts.isEmpty {
@@ -223,7 +282,7 @@ extension ThreadDetailView {
                         tid: model.summary.tid,
                         isLoggedIn: app.isLoggedIn,
                         onRetry: { Task { await model.reload() } },
-                        onLogin: { showLogin = true }
+                        onLogin: { sheet = .login }
                     )
                 }
 
@@ -302,6 +361,13 @@ extension ThreadDetailView {
             post: post,
             onImageTap: openImage,
             onQuoteTap: { pid in Task { await jump(to: pid, from: post.pid) } },
+            onAuthorTap: { post in
+                sheet = .author(AuthorProfile(authorID: post.authorID, name: post.author))
+            },
+            onBlockAuthor: { post in
+                toggleBlock(AuthorProfile(authorID: post.authorID, name: post.author))
+            },
+            isAuthorBlocked: blocks.isBlocked(post.authorID),
             zoomNamespace: imageZoom
         )
         .id(post.pid)
@@ -321,9 +387,9 @@ extension ThreadDetailView {
         if returnPid != nil {
             returnToOrigin()
         } else if app.isLoggedIn {
-            showComposer = true
+            sheet = .composer
         } else {
-            showLogin = true
+            sheet = .login
         }
     }
 
@@ -448,8 +514,14 @@ extension ThreadDetailView {
     }
 
     private var visiblePosts: [Post] {
-        guard onlyOriginalPoster else { return model.posts }
-        return model.posts.filter { $0.author == model.summary.author || $0.isFirst }
+        model.posts.filter { post in
+            // A thread the reader opened on purpose keeps its head even when its
+            // author is blocked; only the replies lose that voice.
+            if post.isFirst { return true }
+            if blocks.isBlocked(post.authorID) { return false }
+            if onlyOriginalPoster { return post.author == model.summary.author }
+            return true
+        }
     }
 
     /// Opens the viewer on the tapped picture, keeping the thread's order so the
@@ -526,9 +598,32 @@ extension ThreadDetailView {
         }
     }
 
+    private func authorSheet(_ profile: AuthorProfile) -> some View {
+        AuthorProfileSheet(
+            name: profile.name,
+            authorID: profile.authorID,
+            replies: model.posts.filter { $0.authorID == profile.authorID },
+            isBlocked: blocks.isBlocked(profile.authorID),
+            canBlock: blocks.canBlock(profile.authorID),
+            isFavorite: isFavorite,
+            onOpen: { post in Task { await jump(to: post.pid) } },
+            onToggleBlock: { toggleBlock(profile) },
+            onToggleFavorite: toggleFavorite
+        )
+    }
+
+    private func toggleBlock(_ profile: AuthorProfile) {
+        let wasBlocked = blocks.isBlocked(profile.authorID)
+        blocks.setBlocked(!wasBlocked, authorID: profile.authorID, name: profile.name)
+        toast = ToastMessage(
+            text: wasBlocked ? "已取消屏蔽 \(profile.name)" : "已屏蔽 \(profile.name)",
+            style: .success
+        )
+    }
+
     private func toggleFavorite() {
         guard app.isLoggedIn else {
-            showLogin = true
+            sheet = .login
             return
         }
         let target = !isFavorite
@@ -554,7 +649,7 @@ extension ThreadDetailView {
             loadEarlier: { force in await loadEarlierKeepingPlace(force: force) },
             reveal: reveal,
             setVisiblePid: { pid in visiblePid = pid },
-            showPageJump: { showPageJump = true },
+            showPageJump: { sheet = .pageJump },
             openImage: openImage,
             showToast: { toast = $0 },
             dismiss: { dismiss() },

@@ -5,6 +5,11 @@ struct PostRowView: View {
     let post: Post
     var onImageTap: (URL) -> Void = { _ in }
     var onQuoteTap: (String) -> Void = { _ in }
+    /// Opens the author's profile sheet.
+    var onAuthorTap: ((Post) -> Void)?
+    /// Adds/removes the author from the local block list.
+    var onBlockAuthor: ((Post) -> Void)?
+    var isAuthorBlocked = false
     /// Shared with the full-screen viewer so a tapped picture can grow out of
     /// its thumbnail (iOS 18 and later).
     var zoomNamespace: Namespace.ID?
@@ -74,6 +79,23 @@ struct PostRowView: View {
 
     @ViewBuilder
     private var menu: some View {
+        if let onAuthorTap {
+            Button {
+                onAuthorTap(post)
+            } label: {
+                Label("作者资料", systemImage: "person.crop.circle")
+            }
+        }
+        if let onBlockAuthor, !post.authorID.isEmpty, post.authorID != "0" {
+            Button {
+                onBlockAuthor(post)
+            } label: {
+                Label(
+                    isAuthorBlocked ? "取消屏蔽此作者" : "屏蔽此作者",
+                    systemImage: isAuthorBlocked ? "person.badge.plus" : "person.slash"
+                )
+            }
+        }
         Button {
             UIPasteboard.general.string = HTMLParser.plainText(post.message)
         } label: {
@@ -93,11 +115,27 @@ struct PostRowView: View {
 
     private var header: some View {
         let who = HStack(spacing: 8) {
-            AvatarView(uid: post.authorID, name: post.author, size: 24)
+            if let onAuthorTap {
+                Button { onAuthorTap(post) } label: {
+                    HStack(spacing: 8) {
+                        AvatarView(uid: post.authorID, name: post.author, size: 24)
 
-            Text(post.author)
-                .font(.subheadline.weight(.semibold))
-                .lineLimitForAccessibility(1)
+                        Text(post.author)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimitForAccessibility(1)
+                    }
+                    // 44pt target around a 24pt avatar, without a taller row.
+                    .contentShape(Rectangle().inset(by: -10))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("查看 \(post.author) 的资料")
+            } else {
+                AvatarView(uid: post.authorID, name: post.author, size: 24)
+
+                Text(post.author)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimitForAccessibility(1)
+            }
 
             if post.isAdmin { adminBadge }
         }
