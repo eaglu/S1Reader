@@ -4,54 +4,35 @@ import Observation
 @MainActor
 @Observable
 final class FavoritesViewModel {
-    var items: [FavoriteThread] = []
-    var isLoading = false
-    var errorMessage: String?
-    var page = 0
-    var hasMore = true
+    let pager = PagedListLoader<FavoriteThread, Void> { page in
+        if let demo = DebugHooks.demoFavorites {
+            return .init(items: demo, hasMore: false)
+        }
+        return .init(items: try await APIClient.shared.favorites(page: page))
+    }
 
+    var items: [FavoriteThread] { pager.items }
+    var isLoading: Bool { pager.isLoading }
+    var errorMessage: String? { pager.errorMessage }
+
+    /// Removes the row straight away and puts it back when the server refuses,
+    /// so the list never claims a favourite is gone when it is not.
     func remove(_ item: FavoriteThread) async {
-        let backup = items
-        items.removeAll { $0.id == item.id }
+        let backup = pager.items
+        pager.replace(backup.filter { $0.id != item.id })
         do {
             try await APIClient.shared.setFavorite(tid: item.tid, favorite: false)
         } catch {
-            items = backup
-            errorMessage = error.localizedDescription
+            pager.replace(backup)
+            pager.reportError(error.localizedDescription)
         }
     }
 
     func load(reset: Bool = false) async {
-        guard !isLoading else { return }
         if reset {
-            page = 0
-            hasMore = true
-        }
-        guard hasMore else { return }
-
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        #if DEBUG
-        if DemoMode.isEnabled {
-            items = DemoMode.favorites
-            hasMore = false
-            return
-        }
-        #endif
-
-        do {
-            let fresh = try await APIClient.shared.favorites(page: page + 1)
-            if fresh.isEmpty {
-                hasMore = false
-            } else {
-                page += 1
-                let existing = Set(items.map(\.id))
-                items.append(contentsOf: fresh.filter { !existing.contains($0.id) })
-            }
-        } catch {
-            errorMessage = error.localizedDescription
+            await pager.reload()
+        } else {
+            await pager.loadMore()
         }
     }
 }

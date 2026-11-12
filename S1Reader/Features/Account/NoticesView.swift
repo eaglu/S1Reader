@@ -4,43 +4,23 @@ import Observation
 @MainActor
 @Observable
 final class NoticesViewModel {
-    var notices: [Notice] = []
-    var isLoading = false
-    var errorMessage: String?
-    var page = 0
-    var hasMore = true
+    let pager = PagedListLoader<Notice, Void> { page in
+        if let demo = DebugHooks.demoNotices {
+            return .init(items: demo, hasMore: false)
+        }
+        return .init(items: try await APIClient.shared.notices(page: page))
+    }
+
+    var notices: [Notice] { pager.items }
+    var isLoading: Bool { pager.isLoading }
+    var errorMessage: String? { pager.errorMessage }
+    var page: Int { pager.page }
 
     func load(reset: Bool = false) async {
-        guard !isLoading else { return }
         if reset {
-            page = 0
-            hasMore = true
-        }
-        guard hasMore else { return }
-
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        #if DEBUG
-        if DemoMode.isEnabled {
-            notices = DemoMode.notices
-            hasMore = false
-            return
-        }
-        #endif
-
-        do {
-            let fresh = try await APIClient.shared.notices(page: page + 1)
-            if fresh.isEmpty {
-                hasMore = false
-            } else {
-                page += 1
-                let existing = Set(notices.map(\.id))
-                notices.append(contentsOf: fresh.filter { !existing.contains($0.id) })
-            }
-        } catch {
-            errorMessage = error.localizedDescription
+            await pager.reload()
+        } else {
+            await pager.loadMore()
         }
     }
 }

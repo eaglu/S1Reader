@@ -1,310 +1,4 @@
 import SwiftUI
-import Observation
-import UIKit
-
-@MainActor
-@Observable
-final class ThreadDetailViewModel {
-    let summary: ThreadSummary
-
-    var posts: [Post] = []
-    var title: String
-    var totalPosts = 0
-    var views = 0
-    var perPage = 40
-    var isLoading = false
-    var isLoadingMore = false
-    /// True while the bottom of the list asks the server for new replies.
-    var isCheckingNewReplies = false
-    /// Result of the last bottom pull, shown under the last post.
-    var lastCheckMessage: String?
-    var errorMessage: String?
-    var loadedPages = 0
-    /// Lowest page currently in `posts`; above 1 the list can still scroll up.
-    var firstLoadedPage = 1
-    /// Set right after a successful reply so the list can scroll to the new post.
-    var focusPid: String?
-    /// Post to scroll to when reopening a thread that was read before.
-    var resumePid: String?
-
-    private var hasMore = true
-    private var didLoad = false
-
-    init(summary: ThreadSummary) {
-        self.summary = summary
-        self.title = summary.subject
-        self.totalPosts = summary.replies + 1
-        self.views = summary.views
-    }
-
-    var pageCount: Int {
-        max(1, Int(ceil(Double(totalPosts) / Double(perPage))))
-    }
-
-    var hasLoadedOnce: Bool { didLoad }
-
-    /// True when the reader is sitting on the first page of a jump (say page 400
-    /// of 400) and the replies above have not been fetched yet.
-    var hasEarlier: Bool { firstLoadedPage > 1 && !posts.isEmpty }
-
-    /// Page range currently loaded, e.g. "第 399–400 / 400 页".
-    var loadedPageRange: String {
-        firstLoadedPage == loadedPages
-            ? "第 \(loadedPages) / \(pageCount) 页"
-            : "第 \(firstLoadedPage)–\(loadedPages) / \(pageCount) 页"
-    }
-
-    /// S1 answers some threads with a bare Discuz "System Error" (HTTP 503) only when
-    /// a session cookie is attached. A 5xx is retried once as a guest, and the thread
-    /// is remembered so later visits skip the doomed signed-in request entirely.
-    private func fetchPage(_ page: Int) async throws -> ThreadPage {
-        let params = ["tid": summary.tid, "page": String(page)]
-
-        if GuestFallbackStore.shared.prefersGuest(tid: summary.tid) {
-            #if DEBUG
-            print("S1 fetchPage tid=\(summary.tid) page=\(page) guest-first")
-            #endif
-            do {
-                return try await APIClient.shared.fetch("viewthread", params, guest: true)
-            } catch {
-                // The guest request stopped working (or the server recovered), so let
-                // the next visit try the signed-in path again.
-                GuestFallbackStore.shared.unmark(summary.tid)
-                throw error
-            }
-        }
-
-        do {
-            #if DEBUG
-            print("S1 fetchPage tid=\(summary.tid) page=\(page) signed-in")
-            #endif
-            return try await APIClient.shared.fetch("viewthread", params)
-        } catch let error as APIError {
-            guard Self.isServerSide(error) else { throw error }
-            let guest: ThreadPage = try await APIClient.shared.fetch(
-                "viewthread",
-                params,
-                guest: true
-            )
-            GuestFallbackStore.shared.mark(summary.tid)
-            #if DEBUG
-            print("S1 fetchPage tid=\(summary.tid) page=\(page) guest-fallback")
-            #endif
-            return guest
-        }
-    }
-
-    private static func isServerSide(_ error: APIError) -> Bool {
-        switch error {
-        case .http(let code):
-            return code >= 500
-        case .server:
-            return true
-        default:
-            return false
-        }
-    }
-
-    func loadIfNeeded() async {
-        guard !didLoad else { return }
-        await reload()
-    }
-
-    func reload() async {
-        guard !isLoading else { return }
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        do {
-            let result = try await fetchPage(1)
-            posts = result.posts
-            perPage = result.perPage
-            if let info = result.thread {
-                title = info.subject
-                totalPosts = info.replies + 1
-                views = info.views
-            }
-            loadedPages = 1
-            firstLoadedPage = 1
-            hasMore = posts.count < totalPosts
-            didLoad = true
-            ThreadVisitStore.shared.markSeen(tid: summary.tid, replies: max(0, totalPosts - 1))
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    /// Jumps back to the post the reader stopped at last time.
-    func restoreReadingPosition() async {
-        // S1_NO_RESTORE=1 lets a screenshot start at page 1 even when this thread
-        // remembers a position (the app otherwise re-saves on every scroll).
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["S1_NO_RESTORE"] != nil { return }
-        #endif
-        guard let saved = ReadingProgressStore.shared.position(for: summary.tid) else { return }
-        let perPage = max(1, self.perPage)
-        let targetPage = max(1, Int(ceil(Double(saved.position) / Double(perPage))))
-        if targetPage != loadedPages {
-            await loadPage(targetPage)
-        }
-        if posts.contains(where: { $0.pid == saved.pid }) {
-            resumePid = saved.pid
-        }
-    }
-
-    func loadPage(_ target: Int) async {
-        guard !isLoading, !isLoadingMore else { return }
-        let clamped = min(max(1, target), pageCount)
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        do {
-            let result = try await fetchPage(clamped)
-            posts = result.posts
-            perPage = result.perPage
-            if let info = result.thread {
-                title = info.subject
-                totalPosts = info.replies + 1
-                views = info.views
-            }
-            loadedPages = clamped
-            firstLoadedPage = clamped
-            hasMore = clamped < pageCount && !result.posts.isEmpty
-            didLoad = true
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func loadMore() async {
-        guard hasMore, !isLoading, !isLoadingMore else { return }
-        let next = loadedPages + 1
-        guard next <= pageCount else {
-            hasMore = false
-            return
-        }
-        isLoadingMore = true
-        defer { isLoadingMore = false }
-
-        do {
-            let result = try await fetchPage(next)
-            let existing = Set(posts.map(\.pid))
-            let fresh = result.posts.filter { !existing.contains($0.pid) }
-            if fresh.isEmpty {
-                // S1 replays the last page for pages past the end, so a page
-                // without new posts means we are done; keep loadedPages put.
-                hasMore = false
-                return
-            }
-            posts.append(contentsOf: fresh)
-            markFresh(fresh.map(\.pid))
-            loadedPages = next
-            #if DEBUG
-            print("S1 loadMore page=\(next) added=\(fresh.count) posts=\(posts.count) top=\(posts.first?.pid ?? "-")")
-            #endif
-            if let info = result.thread {
-                totalPosts = info.replies + 1
-            }
-            hasMore = posts.count < totalPosts
-        } catch {
-            errorMessage = error.localizedDescription
-            hasMore = false
-        }
-    }
-
-    /// Posts that arrived in the most recent insert, so the list can give only
-    /// those rows an entrance. Cleared shortly after.
-    private(set) var freshPids: Set<String> = []
-    private var freshToken = 0
-
-    func isFresh(_ pid: String) -> Bool { freshPids.contains(pid) }
-
-    /// Dismisses a non-blocking error notice without refetching.
-    func clearError() { errorMessage = nil }
-
-    private func markFresh(_ pids: [String]) {
-        guard !pids.isEmpty else { return }
-        freshPids = Set(pids)
-        freshToken += 1
-        let token = freshToken
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(900))
-            guard token == self.freshToken else { return }
-            self.freshPids = []
-        }
-    }
-
-    /// Re-fetches the last loaded page and appends replies that arrived since.
-    /// Returns how many were added, or `nil` when the request failed.
-    @discardableResult
-    func refreshNewReplies() async -> Int? {
-        guard !isCheckingNewReplies, !posts.isEmpty, !isLoading else { return nil }
-        isCheckingNewReplies = true
-        lastCheckMessage = nil
-        defer { isCheckingNewReplies = false }
-
-        do {
-            let result = try await fetchPage(max(1, loadedPages))
-            let known = Set(posts.map(\.pid))
-            let fresh = result.posts.filter { !known.contains($0.pid) }
-            if let info = result.thread {
-                title = info.subject
-                views = info.views
-                totalPosts = info.replies + 1
-            }
-            if !fresh.isEmpty {
-                posts.append(contentsOf: fresh)
-                markFresh(fresh.map(\.pid))
-                hasMore = posts.count < totalPosts
-                ThreadVisitStore.shared.markSeen(tid: summary.tid, replies: max(0, totalPosts - 1))
-            }
-            lastCheckMessage = fresh.isEmpty ? "暂无新回复" : "已加载 \(fresh.count) 条新回复"
-            #if DEBUG
-            print("S1 refreshNewReplies page=\(loadedPages) added=\(fresh.count) posts=\(posts.count) total=\(totalPosts)")
-            #endif
-            return fresh.count
-        } catch {
-            lastCheckMessage = "检查失败：\(error.localizedDescription)"
-            return nil
-        }
-    }
-
-    /// Fetches the page above the one that is loaded and puts it in front of the
-    /// list. Returns the post that was on top so the reader keeps their place.
-    @discardableResult
-    func loadEarlier() async -> String? {
-        guard hasEarlier, !isLoading, !isLoadingMore else { return nil }
-        let target = firstLoadedPage - 1
-        let anchor = posts.first?.pid
-        isLoadingMore = true
-        defer { isLoadingMore = false }
-
-        do {
-            let result = try await fetchPage(target)
-            let existing = Set(posts.map(\.pid))
-            let older = result.posts.filter { !existing.contains($0.pid) }
-            if !older.isEmpty {
-                // No entrance here: these rows land above the viewport, so the
-                // fade would play where nobody can see it.
-                posts.insert(contentsOf: older, at: 0)
-            }
-            firstLoadedPage = target
-            if let info = result.thread {
-                totalPosts = info.replies + 1
-            }
-            hasMore = posts.count < totalPosts
-            #if DEBUG
-            print("S1 loadEarlier page=\(target) added=\(older.count) range=\(loadedPageRange) posts=\(posts.count) anchor=\(anchor ?? "-")")
-            #endif
-            return older.isEmpty ? nil : anchor
-        } catch {
-            errorMessage = error.localizedDescription
-            return nil
-        }
-    }
-}
 
 struct ThreadDetailView: View {
     @Environment(AppModel.self) private var app
@@ -351,16 +45,9 @@ struct ThreadDetailView: View {
 
     private var topAnchorKey: String { visiblePid ?? Marker.empty }
 
-    /// DEBUG hook: `S1_MOTION_SLOW=<factor>` stretches transitions so they can be
-    /// filmed on a simulator (normal playback is 1).
-    private var motionScale: Double {
-        #if DEBUG
-        if let raw = ProcessInfo.processInfo.environment["S1_MOTION_SLOW"], let factor = Double(raw) {
-            return max(1, factor)
-        }
-        #endif
-        return 1
-    }
+    /// `S1_MOTION_SLOW=<factor>` stretches transitions so they can be filmed on
+    /// a simulator (normal playback is 1).
+    private var motionScale: Double { DebugHooks.motionScale }
     @State private var threadImageCount = 0
     /// Posts already scanned for images, so appending a page doesn't rescan everything.
     @State private var scannedPostPids: Set<String> = []
@@ -413,116 +100,7 @@ struct ThreadDetailView: View {
             if let pid = initialFocusPid {
                 await jump(to: pid)
             }
-            #if DEBUG
-            // S1_SCROLL=<pid> jumps to a post so scrolling/saving can be checked
-            // from the command line (the simulator cannot be tapped).
-            // S1_LOADMORE=<n> appends n pages so pagination can be checked.
-            if let raw = ProcessInfo.processInfo.environment["S1_LOADMORE"], let times = Int(raw) {
-                let perfLogging = ProcessInfo.processInfo.environment["S1_PERF"] != nil
-                for _ in 0..<max(0, times) {
-                    try? await Task.sleep(for: .milliseconds(500))
-                    await model.loadMore()
-                    // S1_FRESH_SCROLL=1 reveals the rows that just arrived so the
-                    // entrance can be filmed (they normally land off-screen).
-                    if ProcessInfo.processInfo.environment["S1_FRESH_SCROLL"] != nil,
-                       let first = model.posts.first(where: { model.isFresh($0.pid) }) {
-                        try? await Task.sleep(for: .milliseconds(60))
-                        visiblePid = first.pid
-                    }
-                }
-                if perfLogging { PostBodyCache.shared.reportAndReset("after-loadmore") }
-            }
-            // S1_JUMP_PAGE=<n> then S1_LOAD_EARLIER=<n> exercise jumping to a late
-            // page and loading the replies above it.
-            if let raw = ProcessInfo.processInfo.environment["S1_JUMP_PAGE"], let page = Int(raw) {
-                await model.loadPage(page)
-                didRestorePosition = true
-                // S1_TOP_ROW=1 parks the list one post down so the "load earlier"
-                // row above the first post is on screen for a screenshot.
-                let offset = ProcessInfo.processInfo.environment["S1_TOP_ROW"] == "1" ? 1 : 0
-                visiblePid = model.posts.dropFirst(offset).first?.pid
-                try? await Task.sleep(for: .milliseconds(600))
-            }
-            if let raw = ProcessInfo.processInfo.environment["S1_LOAD_EARLIER"], let times = Int(raw) {
-                for _ in 0..<max(0, times) {
-                    try? await Task.sleep(for: .milliseconds(400))
-                    await loadEarlierKeepingPlace(force: true)
-                }
-            }
-            // S1_LOAD_EARLIER_GATED=<n> replays the scroll-triggered path, which
-            // must load only the first page and then hold until the list moves.
-            if let raw = ProcessInfo.processInfo.environment["S1_LOAD_EARLIER_GATED"],
-               let times = Int(raw) {
-                for _ in 0..<max(0, times) {
-                    try? await Task.sleep(for: .milliseconds(500))
-                    await loadEarlierKeepingPlace()
-                }
-            }
-            // S1_JUMP_SHEET=1 opens the page picker so its input field can be checked.
-            if ProcessInfo.processInfo.environment["S1_JUMP_SHEET"] == "1" {
-                try? await Task.sleep(for: .milliseconds(1200))
-                showPageJump = true
-            }
-            if let pid = ProcessInfo.processInfo.environment["S1_SCROLL"], !pid.isEmpty {
-                try? await Task.sleep(for: .milliseconds(300))
-                visiblePid = pid
-            }
-            if let raw = ProcessInfo.processInfo.environment["S1_VIEW_IMAGE"],
-               let target = URL(string: raw) {
-                try? await Task.sleep(for: .milliseconds(1200))
-                openImage(target)
-            }
-            // S1_TOAST=<text> shows the toast so its look and timing can be filmed.
-            if let text = ProcessInfo.processInfo.environment["S1_TOAST"], !text.isEmpty {
-                try? await Task.sleep(for: .milliseconds(400))
-                let hold = ProcessInfo.processInfo.environment["S1_TOAST_HOLD"].flatMap(Int.init) ?? 2200
-                toast = ToastMessage(text: text, style: .success, duration: .milliseconds(hold))
-            }
-            // S1_INLINE_NOTICE=<text> forces the inline retry notice.
-            if let text = ProcessInfo.processInfo.environment["S1_INLINE_NOTICE"], !text.isEmpty {
-                model.errorMessage = text
-            }
-            // S1_QUOTE_TAP=<pid> follows a quote (the button turns into "back");
-            // S1_QUOTE_BACK=1 then takes it, so both states can be filmed.
-            if let pid = ProcessInfo.processInfo.environment["S1_QUOTE_TAP"], !pid.isEmpty {
-                // Wait for the first page, otherwise there is no origin to return to.
-                for _ in 0..<25 where model.posts.isEmpty {
-                    try? await Task.sleep(for: .milliseconds(200))
-                }
-                try? await Task.sleep(for: .milliseconds(600))
-                await jump(
-                    to: pid,
-                    from: ProcessInfo.processInfo.environment["S1_QUOTE_FROM"]
-                )
-                if ProcessInfo.processInfo.environment["S1_QUOTE_BACK"] == "1" {
-                    try? await Task.sleep(for: .milliseconds(1800))
-                    returnToOrigin()
-                }
-            }
-            // S1_CHECK_NEW=1 exercises the bottom pull without a gesture.
-            if ProcessInfo.processInfo.environment["S1_CHECK_NEW"] == "1" {
-                try? await Task.sleep(for: .milliseconds(1500))
-                let added = await model.refreshNewReplies()
-                let addedText: String = added.map { String($0) } ?? "nil"
-                let messageText: String = model.lastCheckMessage ?? "-"
-                print("S1_CHECK_NEW added=" + addedText + " message=" + messageText)
-            }
-            // S1_POP=1 pops back to the list so the tab bar's return can be filmed.
-            if ProcessInfo.processInfo.environment["S1_POP"] == "1" {
-                try? await Task.sleep(for: .milliseconds(2500))
-                dismiss()
-            }
-            // S1_CLEAR_IMAGES=1 drops this thread's cached pictures so the eviction
-            // path can be checked without tapping the menu.
-            if ProcessInfo.processInfo.environment["S1_CLEAR_IMAGES"] == "1" {
-                try? await Task.sleep(for: .milliseconds(1500))
-                let before = await ImageLoader.shared.diskUsage()
-                clearThreadImageCache()
-                try? await Task.sleep(for: .milliseconds(800))
-                let after = await ImageLoader.shared.diskUsage()
-                print("S1_CLEAR_IMAGES \(before) -> \(after)")
-            }
-            #endif
+            await ThreadDetailDebugScript(hooks: debugHooks).run()
         }
         .refreshable { await model.reload() }
         .toolbar {
@@ -850,9 +428,7 @@ extension ThreadDetailView {
         // Pulling past the top fires many times in a row; one page per approach.
         if !force {
             guard lastEarlierPageAnchor != topAnchorKey else {
-                #if DEBUG
-                print("S1 loadEarlier skipped: same approach (top=\(topAnchorKey))")
-                #endif
+                DebugHooks.log("S1 loadEarlier skipped: same approach (top=\(topAnchorKey))")
                 return
             }
         }
@@ -900,31 +476,13 @@ extension ThreadDetailView {
         let htmls = fresh.map(\.message)
         scannedPostPids.formUnion(pids)
 
-        #if DEBUG
-        let timing = ProcessInfo.processInfo.environment["S1_PERF_BENCH"] != nil
-        #endif
-
         Task {
-            let started = Date()
             let urls = await Task.detached(priority: .utility) {
                 htmls.flatMap { HTMLParser.imageURLs(in: $0) }
             }.value
-            #if DEBUG
-            if timing {
-                let fast = Date().timeIntervalSince(started) * 1000
-                let slowStart = Date()
-                _ = await Task.detached(priority: .utility) {
-                    htmls.flatMap { html in
-                        HTMLParser.parse(html).compactMap { node -> URL? in
-                            if case .image(let url, let isSmiley) = node, !isSmiley { return url }
-                            return nil
-                        }
-                    }
-                }.value
-                let slow = Date().timeIntervalSince(slowStart) * 1000
-                print("S1_PERF imageURLs posts=\(htmls.count) scan=\(String(format: "%.1f", fast))ms fullParse=\(String(format: "%.1f", slow))ms")
+            if let report = await DebugHooks.imageScanBenchmark(htmls) {
+                DebugHooks.log(report)
             }
-            #endif
             // Reserve the right height for every picture on the page now, so
             // scrolling over them never reflows the list.
             await ImageLoader.shared.prefetchAspects(for: urls)
@@ -983,5 +541,24 @@ extension ThreadDetailView {
                 toast = ToastMessage(text: error.localizedDescription, style: .warning)
             }
         }
+    }
+}
+
+/// The `S1_*` rehearsal hooks, wired to this screen's own state.
+extension ThreadDetailView {
+    var debugHooks: ThreadDetailDebugScript.Hooks {
+        ThreadDetailDebugScript.Hooks(
+            model: model,
+            jump: { pid, from in await jump(to: pid, from: from) },
+            returnToOrigin: returnToOrigin,
+            loadEarlier: { force in await loadEarlierKeepingPlace(force: force) },
+            reveal: reveal,
+            setVisiblePid: { pid in visiblePid = pid },
+            showPageJump: { showPageJump = true },
+            openImage: openImage,
+            showToast: { toast = $0 },
+            dismiss: { dismiss() },
+            clearThreadImageCache: clearThreadImageCache
+        )
     }
 }

@@ -1,79 +1,4 @@
 import SwiftUI
-import Observation
-
-@MainActor
-@Observable
-final class ThreadListViewModel {
-    let forum: Forum
-
-    var threads: [ThreadSummary] = []
-    var isLoading = false
-    var isLoadingMore = false
-    var errorMessage: String?
-    var totalThreads = 0
-    var perPage = 50
-
-    private var page = 0
-    private var hasMore = true
-    private var didLoad = false
-
-    init(forum: Forum) {
-        self.forum = forum
-    }
-
-    var hasLoadedOnce: Bool { didLoad }
-
-    func loadIfNeeded() async {
-        guard !didLoad else { return }
-        await reload()
-    }
-
-    func reload() async {
-        guard !isLoading else { return }
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        do {
-            let result: ThreadListPage = try await APIClient.shared.fetch(
-                "forumdisplay",
-                ["fid": forum.fid, "page": "1"]
-            )
-            threads = result.threads
-            perPage = result.perPage
-            totalThreads = result.totalThreads
-            page = 1
-            hasMore = !result.threads.isEmpty
-            didLoad = true
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func loadMore() async {
-        guard hasMore, !isLoading, !isLoadingMore else { return }
-        isLoadingMore = true
-        defer { isLoadingMore = false }
-
-        let next = page + 1
-        do {
-            let result: ThreadListPage = try await APIClient.shared.fetch(
-                "forumdisplay",
-                ["fid": forum.fid, "page": String(next)]
-            )
-            let existing = Set(threads.map(\.tid))
-            let fresh = result.threads.filter { !existing.contains($0.tid) }
-            threads.append(contentsOf: fresh)
-            page = next
-            if result.threads.isEmpty || fresh.isEmpty {
-                hasMore = false
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-            hasMore = false
-        }
-    }
-}
 
 struct ThreadListView: View {
     let forum: Forum
@@ -82,13 +7,9 @@ struct ThreadListView: View {
     @State private var showOnlyToday = false
     @State private var query = Self.initialQuery
 
-    /// Debug hook so the search field can be filled from the command line.
+    /// `S1_SEARCH=<text>` fills the search field from the command line.
     private static var initialQuery: String {
-        #if DEBUG
-        ProcessInfo.processInfo.environment["S1_SEARCH"] ?? ""
-        #else
-        ""
-        #endif
+        DebugHooks.string("S1_SEARCH") ?? ""
     }
 
     private var trimmedQuery: String {
