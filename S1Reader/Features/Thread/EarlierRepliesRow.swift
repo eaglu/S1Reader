@@ -11,24 +11,26 @@ struct EarlierRepliesRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 8) {
-            if isLoading {
-                ProgressView()
-            } else {
-                Image(systemName: "arrow.up.circle")
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if isLoading {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.up.circle")
+                }
+                Text(isLoading ? "正在加载第 \(page) 页…" : "加载更早的回复（第 \(page) 页）")
             }
-            Text(isLoading ? "正在加载第 \(page) 页…" : "加载更早的回复（第 \(page) 页）")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .contentTransition(reduceMotion ? .identity : .opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isLoading)
         }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .contentTransition(reduceMotion ? .identity : .opacity)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isLoading)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: action)
+        .buttonStyle(PressableRow())
+        .disabled(isLoading)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
         .accessibilityHint("载入上一页的回复")
     }
 }

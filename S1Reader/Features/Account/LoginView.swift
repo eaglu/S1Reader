@@ -31,10 +31,14 @@ struct LoginView: View {
                         .textContentType(.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .submitLabel(.next)
                         .focused($focus, equals: .username)
+                        .onSubmit { advance(from: .username) }
                     SecureField("密码", text: $password)
                         .textContentType(.password)
+                        .submitLabel(questionID > 0 ? .next : .go)
                         .focused($focus, equals: .password)
+                        .onSubmit { advance(from: .password) }
                 } header: {
                     Text("S1 账号")
                 }
@@ -47,7 +51,9 @@ struct LoginView: View {
                     }
                     if questionID > 0 {
                         TextField("答案", text: $answer)
+                            .submitLabel(.go)
                             .focused($focus, equals: .answer)
+                            .onSubmit { advance(from: .answer) }
                     }
                 }
 
@@ -85,7 +91,10 @@ struct LoginView: View {
                     Button("取消") { dismiss() }
                 }
             }
-            .onAppear { focus = .username }
+            .onAppear {
+                // Only grab the keyboard when there is something to type.
+                if username.isEmpty { focus = .username }
+            }
         }
     }
 
@@ -93,6 +102,29 @@ struct LoginView: View {
         !username.trimmingCharacters(in: .whitespaces).isEmpty
             && !password.isEmpty
             && (questionID == 0 || !answer.isEmpty)
+    }
+
+    /// Return moves down the form and finishes on the last field, so the
+    /// keyboard never strands the reader on the login button.
+    private func advance(from field: Field) {
+        switch field {
+        case .username:
+            focus = .password
+        case .password:
+            if questionID > 0 {
+                focus = .answer
+            } else {
+                submitIfPossible()
+            }
+        case .answer:
+            submitIfPossible()
+        }
+    }
+
+    private func submitIfPossible() {
+        guard canSubmit, !model.isLoggingIn else { return }
+        focus = nil
+        Task { await submit() }
     }
 
     private func submit() async {

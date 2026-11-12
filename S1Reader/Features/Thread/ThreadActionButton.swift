@@ -31,10 +31,17 @@ struct ThreadActionButton: View {
         } else {
             Button(action: action) {
                 glyphs
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.accentColor)
                     .frame(width: 52, height: 52)
-                    .background(Color.accentColor, in: Circle())
-                    .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+                    // A material circle keeps the tinted glyph legible in both
+                    // appearances; white on the accent fill was 2.6:1 in dark
+                    // mode, under the 3:1 a large glyph needs.
+                    .background(.regularMaterial, in: Circle())
+                    .overlay {
+                        Circle().strokeBorder(Color.primary.opacity(0.08))
+                    }
+                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(mode == .reply ? "回复本帖" : "返回到刚才的楼")
@@ -55,7 +62,8 @@ struct ThreadActionButton: View {
 
     private func glyph(_ glyphMode: Mode) -> some View {
         Image(systemName: glyphMode == .reply ? "arrow.turn.up.left" : "arrow.backward.to.line")
-            .font(.system(size: 20, weight: .semibold))
+            .font(.title3.weight(.semibold))
+            .imageScale(.medium)
     }
 }
 

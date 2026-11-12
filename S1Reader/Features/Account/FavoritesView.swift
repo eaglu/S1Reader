@@ -62,14 +62,17 @@ struct FavoritesView: View {
     var body: some View {
         List {
             if let error = vm.errorMessage, vm.items.isEmpty {
-                ContentUnavailableView {
-                    Label("加载失败", systemImage: "bookmark.slash")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("重试") { Task { await vm.load(reset: true) } }
-                        .buttonStyle(.borderedProminent)
+                Section {
+                    ContentUnavailableView {
+                        Label("加载失败", systemImage: "bookmark.slash")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("重试") { Task { await vm.load(reset: true) } }
+                            .buttonStyle(.borderedProminent)
+                    }
                 }
+                .listRowBackground(Color.clear)
             }
 
             ForEach(vm.items) { item in
@@ -77,7 +80,7 @@ struct FavoritesView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(item.subject)
                             .font(.body)
-                            .lineLimit(3)
+                            .lineLimitForAccessibility(3)
                         HStack(spacing: 10) {
                             Text(item.author)
                             Text("\(item.replies) 回复")
@@ -107,8 +110,12 @@ struct FavoritesView: View {
                 ForEach(0..<6, id: \.self) { _ in
                     SkeletonFavoriteRow()
                 }
+                .listRowSeparator(.hidden)
             } else if vm.items.isEmpty && vm.errorMessage == nil {
-                ContentUnavailableView("收藏夹是空的", systemImage: "bookmark")
+                Section {
+                    ContentUnavailableView("收藏夹是空的", systemImage: "bookmark")
+                }
+                .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)

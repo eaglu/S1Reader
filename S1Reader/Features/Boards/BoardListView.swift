@@ -58,6 +58,12 @@ struct BoardListView: View {
                 Section {
                     ContentUnavailableView.search(text: trimmedQuery)
                 }
+                .listRowBackground(Color.clear)
+            } else if model.loadError == nil && filteredSections.isEmpty {
+                Section {
+                    ContentUnavailableView("没有版块", systemImage: "square.grid.2x2")
+                }
+                .listRowBackground(Color.clear)
             }
 
             ForEach(Array(filteredSections.enumerated()), id: \.offset) { _, section in
@@ -102,7 +108,7 @@ private struct ForumRow: View {
                 Text(forum.description)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimitForAccessibility(2)
             }
 
             Text("主题 \(Formatters.compactCount(forum.threads)) · 帖数 \(Formatters.compactCount(forum.posts))")

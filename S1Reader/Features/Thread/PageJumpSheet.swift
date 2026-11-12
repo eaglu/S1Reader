@@ -10,6 +10,8 @@ struct PageJumpSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var text: String
     @FocusState private var isEditing: Bool
+    /// Fixed heights clip the form once the reader turns type up.
+    @ScaledMetric(relativeTo: .body) private var detentHeight: CGFloat = 300
 
     init(current: Int, total: Int, onJump: @escaping (Int) -> Void) {
         self.current = current
@@ -75,7 +77,8 @@ struct PageJumpSheet: View {
                 if trimmed != value { text = trimmed }
             }
         }
-        .presentationDetents([.height(300)])
+        .presentationDetents([.height(detentHeight)])
+        .presentationDragIndicator(.visible)
         .task {
             // Give the sheet time to slide in before taking focus.
             try? await Task.sleep(for: .milliseconds(350))

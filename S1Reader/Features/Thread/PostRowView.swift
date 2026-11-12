@@ -92,24 +92,17 @@ struct PostRowView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        let who = HStack(spacing: 8) {
             AvatarView(uid: post.authorID, name: post.author, size: 24)
 
             Text(post.author)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
+                .lineLimitForAccessibility(1)
 
-            if post.isAdmin {
-                Text("管理")
-                    .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
-                    .foregroundStyle(.orange)
-            }
+            if post.isAdmin { adminBadge }
+        }
 
-            Spacer(minLength: 4)
-
+        let when = HStack(spacing: 8) {
             Text("#\(post.position)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
@@ -118,6 +111,32 @@ struct PostRowView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+
+        // At accessibility sizes the name and the metadata each need a line of
+        // their own; side by side they squeeze the author into "活…".
+        return Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    who
+                    when
+                }
+            } else {
+                HStack(spacing: 8) {
+                    who
+                    Spacer(minLength: 4)
+                    when
+                }
+            }
+        }
+    }
+
+    private var adminBadge: some View {
+        Text("管理")
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
+            .foregroundStyle(.orange)
     }
 }
 

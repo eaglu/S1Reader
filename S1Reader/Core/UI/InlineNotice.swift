@@ -31,6 +31,8 @@ struct InlineNotice: View {
                 Button(retryTitle, action: onRetry)
                     .font(.footnote.weight(.semibold))
                     .buttonStyle(.borderless)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
             if let onDismiss {
                 Button {
@@ -39,17 +41,22 @@ struct InlineNotice: View {
                     Image(systemName: "xmark")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.secondary)
+                        // A glyph this small still needs a full-size target.
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("关闭提示")
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 4)
         .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
+        .padding(.vertical, 6)
+        // Contained, not combined: the retry and dismiss buttons stay
+        // individually reachable with VoiceOver.
+        .accessibilityElement(children: .contain)
     }
 }
 
