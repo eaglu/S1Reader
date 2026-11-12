@@ -36,3 +36,23 @@ struct AdaptiveThreadListStyle: ViewModifier {
         }
     }
 }
+
+/// Caps a preview line count at normal sizes, but stops truncating once the
+/// reader is using accessibility text sizes (HIG: Dynamic Type).
+private struct AccessibilityLineLimit: ViewModifier {
+    let lines: Int
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        content.lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : lines)
+    }
+}
+
+extension View {
+    /// Line limit for summary text: `lines` normally, unlimited at
+    /// accessibility sizes where every glyph has to fit.
+    func lineLimitForAccessibility(_ lines: Int) -> some View {
+        modifier(AccessibilityLineLimit(lines: lines))
+    }
+}

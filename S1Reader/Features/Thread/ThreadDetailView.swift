@@ -525,11 +525,6 @@ struct ThreadDetailView: View {
             #endif
         }
         .refreshable { await model.reload() }
-        .overlay {
-            if model.isLoading && model.posts.isEmpty {
-                ProgressView()
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // Favourite is the most frequent action here, so it gets its own
@@ -587,41 +582,38 @@ struct ThreadDetailView: View {
     @ViewBuilder
     private var moreMenu: some View {
         Menu {
-                        Section {
-                            Button {
-                                onlyOriginalPoster.toggle()
-                            } label: {
-                                Label(
-                                    onlyOriginalPoster ? "显示全部楼层" : "只看楼主",
-                                    systemImage: onlyOriginalPoster ? "person.2" : "person"
-                                )
-                            }
-                        }
-                        Section {
-                            Button {
-                                showPageJump = true
-                            } label: {
-                                Label("跳到指定页（共 \(model.pageCount) 页）", systemImage: "number")
-                            }
-                            Button {
-                                Task { await model.reload() }
-                            } label: {
-                                Label("刷新", systemImage: "arrow.clockwise")
-                            }
-                            if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
-                                ShareLink(item: webURL) {
-                                    Label("分享主题", systemImage: "square.and.arrow.up")
-                                }
-                            }
-                        }
-                        Section {
-                            Button(role: .destructive) {
-                                clearThreadImageCache()
-                            } label: {
-                                Label("清除本帖图片缓存（\(threadImageCount) 张）", systemImage: "trash")
-                            }
-                            .disabled(threadImageCount == 0)
-                        }
+            Section {
+                // A toggle, not a button that renames itself: the menu shows a
+                // checkmark for the state and keeps the label stable.
+                Toggle(isOn: $onlyOriginalPoster) {
+                    Label("只看楼主", systemImage: "person")
+                }
+            }
+            Section {
+                Button {
+                    showPageJump = true
+                } label: {
+                    Label("跳到指定页（共 \(model.pageCount) 页）", systemImage: "number")
+                }
+                Button {
+                    Task { await model.reload() }
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                if let webURL = URL(string: "https://stage1st.com/2b/thread-\(model.summary.tid)-1-1.html") {
+                    ShareLink(item: webURL) {
+                        Label("分享主题", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+            Section {
+                Button(role: .destructive) {
+                    clearThreadImageCache()
+                } label: {
+                    Label("清除本帖图片缓存（\(threadImageCount) 张）", systemImage: "trash")
+                }
+                .disabled(threadImageCount == 0)
+            }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -658,6 +650,16 @@ extension ThreadDetailView {
                 }
 
                 earlierRow
+
+                // First load shows the shape of the replies instead of a spinner
+                // on an empty page; a thread that really has no reply says so.
+                if model.posts.isEmpty, model.errorMessage == nil {
+                    if model.isLoading || !model.hasLoadedOnce {
+                        ForEach(0..<3, id: \.self) { _ in SkeletonPostRow() }
+                    } else {
+                        ThreadEmptyState()
+                    }
+                }
 
                 ForEach(visiblePosts) { post in
                     postRow(post)

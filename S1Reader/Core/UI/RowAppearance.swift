@@ -42,3 +42,17 @@ extension View {
         modifier(RowEntrance(isNew: isNew))
     }
 }
+
+/// Pressed state for rows that act as buttons without looking like one. The tint
+/// fill matches how system table rows respond, so the row still feels tappable.
+struct PressableRow: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? Color.primary.opacity(0.08)
+                    : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+    }
+}

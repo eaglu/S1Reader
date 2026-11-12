@@ -130,10 +130,27 @@ struct ThreadListView: View {
                 ForEach(0..<8, id: \.self) { _ in
                     SkeletonThreadRow()
                 }
+                .listRowSeparator(.hidden)
             } else if !trimmedQuery.isEmpty && visibleThreads.isEmpty {
                 Section {
                     ContentUnavailableView.search(text: trimmedQuery)
                 }
+                .listRowBackground(Color.clear)
+            } else if model.errorMessage == nil && model.threads.isEmpty {
+                Section {
+                    ContentUnavailableView("暂无主题", systemImage: "text.bubble")
+                }
+                .listRowBackground(Color.clear)
+            } else if model.errorMessage == nil && visibleThreads.isEmpty {
+                // Only reachable with the 只看今日新帖 filter on.
+                Section {
+                    ContentUnavailableView(
+                        "今天还没有新帖",
+                        systemImage: "calendar",
+                        description: Text("关掉筛选可以看到全部主题。")
+                    )
+                }
+                .listRowBackground(Color.clear)
             }
 
             ForEach(visibleThreads) { thread in
@@ -162,20 +179,20 @@ struct ThreadListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.reload() }
         .task { await model.loadIfNeeded() }
-        .overlay {
-            if !model.isLoading && model.threads.isEmpty && model.errorMessage == nil && trimmedQuery.isEmpty {
-                ContentUnavailableView("暂无主题", systemImage: "text.bubble")
-            }
-        }
         .sensoryFeedback(.selection, trigger: showOnlyToday)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Toggle("只看今日新帖", isOn: $showOnlyToday)
                 } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
+                    Image(
+                        systemName: showOnlyToday
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle"
+                    )
                 }
                 .accessibilityLabel("筛选主题")
+                .accessibilityValue(showOnlyToday ? "只看今日新帖" : "全部主题")
             }
         }
     }
@@ -196,6 +213,7 @@ private struct ThreadRow: View {
     let thread: ThreadSummary
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var badgeShown = false
 
     private var newReplies: Int {
@@ -220,35 +238,19 @@ private struct ThreadRow: View {
 
                 Text(thread.subject.isEmpty ? "（无标题）" : thread.subject)
                     .font(.callout.weight(.medium))
-                    .lineLimit(2)
+                    .lineLimitForAccessibility(2)
                     .multilineTextAlignment(.leading)
             }
 
-            HStack(spacing: 10) {
-                IconText(systemImage: "person", text: thread.author)
-                IconText(systemImage: "bubble.left", text: "\(thread.replies)")
-                if newReplies > 0 {
-                    Text("+\(newReplies)")
-                        .font(.caption2.weight(.bold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Color.accentColor.opacity(0.15), in: Capsule())
-                        .foregroundStyle(Color.accentColor)
-                        .scaleEffect(badgeShown ? 1 : 0.6)
-                        .opacity(badgeShown ? 1 : 0)
-                        .onAppear {
-                            guard !reduceMotion else {
-                                badgeShown = true
-                                return
-                            }
-                            withAnimation(.spring(response: 0.34, dampingFraction: 0.7)) {
-                                badgeShown = true
-                            }
-                        }
-                        .accessibilityLabel("上次浏览后新增 \(newReplies) 条回复")
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 4) { statistics }
+                } else {
+                    HStack(spacing: 10) {
+                        statistics
+                        Spacer(minLength: 0)
+                    }
                 }
-                IconText(systemImage: "eye", text: Formatters.compactCount(thread.views))
-                Spacer(minLength: 0)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -262,6 +264,34 @@ private struct ThreadRow: View {
             .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
+    }
+
+    /// Author, reply and view counts, with the new-reply badge if there is one.
+    @ViewBuilder
+    private var statistics: some View {
+        IconText(systemImage: "person", text: thread.author)
+        IconText(systemImage: "bubble.left", text: "\(thread.replies)")
+        if newReplies > 0 {
+            Text("+\(newReplies)")
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Color.accentColor.opacity(0.15), in: Capsule())
+                .foregroundStyle(Color.accentColor)
+                .scaleEffect(badgeShown ? 1 : 0.6)
+                .opacity(badgeShown ? 1 : 0)
+                .onAppear {
+                    guard !reduceMotion else {
+                        badgeShown = true
+                        return
+                    }
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.7)) {
+                        badgeShown = true
+                    }
+                }
+                .accessibilityLabel("上次浏览后新增 \(newReplies) 条回复")
+        }
+        IconText(systemImage: "eye", text: Formatters.compactCount(thread.views))
     }
 }
 

@@ -13,6 +13,7 @@ struct AccountView: View {
     @State private var cacheBytes = 0
     @State private var guestFallbackCount = 0
     @State private var showLogoutConfirm = false
+    @State private var toast: ToastMessage?
 
     var body: some View {
         List {
@@ -40,21 +41,12 @@ struct AccountView: View {
 
             Section("功能") {
                 if model.isLoggedIn {
+                    // System badge: it scales with Dynamic Type and announces
+                    // itself to VoiceOver without a capsule of our own.
                     NavigationLink(value: AccountRoute.notices) {
-                        HStack {
-                            Label("提醒", systemImage: "bell")
-                            Spacer()
-                            let unread = model.member?.unreadNotices ?? 0
-                            if unread > 0 {
-                                Text("\(unread)")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(Color.red, in: Capsule())
-                            }
-                        }
+                        Label("提醒", systemImage: "bell")
                     }
+                    .badge(model.member?.unreadNotices ?? 0)
                     NavigationLink(value: AccountRoute.favorites) {
                         Label("收藏夹", systemImage: "bookmark")
                     }
@@ -100,19 +92,19 @@ struct AccountView: View {
             }
 
             Section {
-                HStack {
-                    Text("图片缓存")
-                    Spacer()
-                    Text(cacheDescription)
-                        .foregroundStyle(.secondary)
-                }
                 NavigationLink(value: AccountRoute.imageCache) {
-                    Label("图片缓存管理", systemImage: "photo.on.rectangle.angled")
+                    HStack {
+                        Label("图片缓存", systemImage: "photo.on.rectangle.angled")
+                        Spacer()
+                        Text(cacheDescription)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Button("清除缓存", role: .destructive) {
                     Task {
                         await ImageLoader.shared.clearCaches()
                         await refreshCacheUsage()
+                        toast = ToastMessage(text: "已清除图片缓存", style: .success)
                     }
                 }
                 .disabled(cacheBytes == 0)
@@ -146,6 +138,7 @@ struct AccountView: View {
             }
         }
         .navigationTitle("我的")
+        .toast($toast)
         .refreshable {
             await model.refreshMember()
             await refreshCacheUsage()

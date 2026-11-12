@@ -68,3 +68,37 @@ struct ThreadListFooter: View {
         }
     }
 }
+
+/// Placeholder posts for the first load of a thread. The reader sees the shape
+/// of what is coming instead of a spinner on an empty page.
+struct SkeletonPostRow: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                SkeletonBar(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 6) {
+                    SkeletonBar(width: 110, height: 12)
+                    SkeletonBar(width: 68, height: 9)
+                }
+            }
+            SkeletonBar(height: 12)
+            SkeletonBar(height: 12)
+            SkeletonBar(width: 210, height: 12)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A thread that loaded fine but came back without any reply.
+struct ThreadEmptyState: View {
+    var body: some View {
+        ContentUnavailableView(
+            "还没有回复",
+            systemImage: "bubble.left.and.bubble.right",
+            description: Text("这个主题暂时没有内容，可以稍后刷新。")
+        )
+        .padding(.top, 40)
+    }
+}

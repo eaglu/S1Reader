@@ -19,7 +19,7 @@ struct ImageCacheView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entry.title.isEmpty ? "主题 \(entry.tid)" : entry.title)
                                 .font(.subheadline)
-                                .lineLimit(2)
+                                .lineLimitForAccessibility(2)
                             Text("\(entry.urls.count) 张图片 · \(Formatters.relative(entry.updatedAt))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

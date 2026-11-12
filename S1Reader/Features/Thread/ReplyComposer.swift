@@ -22,6 +22,7 @@ struct ReplyComposer: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .scrollContentBackground(.hidden)
+                    .scrollDismissesKeyboard(.interactively)
 
                 if let errorMessage {
                     Text(errorMessage)

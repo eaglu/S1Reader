@@ -132,7 +132,7 @@ private struct NoticeRow: View {
                 Text(notice.note)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .lineLimit(4)
+                    .lineLimitForAccessibility(4)
             }
         }
         .padding(.vertical, 4)
