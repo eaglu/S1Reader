@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Development hooks driven by launch environment variables.
 ///
@@ -26,12 +27,17 @@ enum DebugHooks {
     }
 
     /// Prints only in debug builds. The message is an autoclosure, so nothing
-    /// is formatted in release either.
+    /// is formatted in release either. It also goes to the unified log, which is
+    /// where `simctl`/Console can read it back without an attached debugger.
     static func log(_ message: @autoclosure () -> String) {
         #if DEBUG
-        print(message())
+        let text = message()
+        print(text)
+        logger.debug("\(text, privacy: .public)")
         #endif
     }
+
+    private static let logger = Logger(subsystem: "com.faye.S1Reader", category: "debug")
 
     /// `S1_MOTION_SLOW=<factor>` stretches transitions so they can be filmed.
     static var motionScale: Double {

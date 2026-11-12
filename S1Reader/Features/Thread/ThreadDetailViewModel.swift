@@ -25,23 +25,34 @@ final class ThreadDetailViewModel {
     var resumePid: String?
     /// Lowest page currently in `posts`; above 1 the list can still scroll up.
     var firstLoadedPage = 1
+    /// True from the moment an earlier page is asked for until it has been
+    /// merged. Set before the first suspension point, so a second request that
+    /// arrives while the page is still on the wire is dropped instead of
+    /// queued behind it.
+    private(set) var isLoadingEarlier = false
 
     let pager: PagedListLoader<Post, ThreadPage>
+
+    /// One page of a thread. Injectable so tests can page without a network.
+    typealias PageFetch = @MainActor (_ page: Int) async throws -> ThreadPage
 
     /// Posts that arrived in the most recent insert, so the list can give only
     /// those rows an entrance. Cleared shortly after.
     private(set) var freshPids: Set<String> = []
     private var freshToken = 0
 
-    init(summary: ThreadSummary) {
+    init(summary: ThreadSummary, fetch: PageFetch? = nil) {
         self.summary = summary
         title = summary.subject
         totalPosts = summary.replies + 1
         views = summary.views
 
         let tid = summary.tid
+        let fetcher = fetch ?? { page in
+            try await ThreadPageLoader.fetch(tid: tid, page: page)
+        }
         pager = PagedListLoader { page in
-            let result = try await ThreadPageLoader.fetch(tid: tid, page: page)
+            let result = try await fetcher(page)
             return .init(items: result.posts, context: result)
         }
         pager.onPageLoaded = { [weak self] page, _, result in
@@ -121,6 +132,9 @@ final class ThreadDetailViewModel {
             hasMore = false
             return
         }
+        // `pager.loadMore` guards on its own flags, but checking here too keeps
+        // the list from spawning a task per visible frame while a page lands.
+        guard !pager.isLoading, !pager.isLoadingMore else { return }
         await pager.loadMore()
     }
 
@@ -128,7 +142,14 @@ final class ThreadDetailViewModel {
     /// list. Returns the post that was on top so the reader keeps their place.
     @discardableResult
     func loadEarlier() async -> String? {
-        guard hasEarlier else { return nil }
+        // The flag is raised before anything can suspend. A pull that arrives
+        // while this page is in flight is dropped: the reader is looking at the
+        // page they already have, and queuing would keep prepending pages under
+        // their floor.
+        guard hasEarlier, !isLoadingEarlier, !pager.isLoading, !isLoadingMore else { return nil }
+        isLoadingEarlier = true
+        defer { isLoadingEarlier = false }
+
         let target = firstLoadedPage - 1
         let anchor = posts.first?.pid
         guard let older = await pager.prepend(page: target) else { return nil }

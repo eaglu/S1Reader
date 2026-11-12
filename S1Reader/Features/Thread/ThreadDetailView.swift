@@ -28,6 +28,15 @@ struct ThreadDetailView: View {
     /// pulled once per approach instead of as fast as the screen can fill.
     @State private var lastNextPageAnchor = Marker.none
     @State private var lastEarlierPageAnchor = Marker.none
+    /// The floor the reader is on while an earlier page is on the wire;
+    /// prepending churns `visiblePid`, so this is what has to stay put (and be
+    /// saved as the reading position).
+    @State private var earlierAnchorPid: String?
+    /// A floor that still has to be put back at the top once the list comes to
+    /// rest: a live gesture owns the scroll position until the finger is up.
+    @State private var pendingPinPid: String?
+    @State private var scrollOffset: CGFloat = 0
+    @State private var isScrollSettled = true
     /// Where the reader stood before jumping to a quoted floor; drives the
     /// floating button's second state.
     @State private var returnPid: String?
@@ -35,10 +44,6 @@ struct ThreadDetailView: View {
     @State private var highlightTask: Task<Void, Never>?
     @State private var toast: ToastMessage?
     @Namespace private var imageZoom
-    /// Overscroll is ignored briefly after a jump, so the programmatic scroll
-    /// cannot be mistaken for the reader pulling the list.
-    @State private var ignoreOverscrollUntil = Date.distantPast
-
     /// What the single sheet slot is showing.
     private enum Sheet: Identifiable {
         case pageJump
@@ -141,7 +146,10 @@ struct ThreadDetailView: View {
             }
             await ThreadDetailDebugScript(hooks: debugHooks).run()
         }
-        .refreshable { await model.reload() }
+        // No pull-to-refresh here: the pull past the top is this screen's
+        // "earlier replies" gesture, and a refresh would replace the window with
+        // page one, dropping the reader on the thread's oldest replies. New
+        // replies arrive from the bottom overscroll instead.
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // Favourite is the most frequent action here, so it gets its own
@@ -333,6 +341,18 @@ extension ThreadDetailView {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isCrossfading)
         }
         .scrollPosition(id: $visiblePid, anchor: .top)
+        .accessibilityIdentifier("threadScroll")
+        .accessibilityValue(debugWindowProbe)
+        .modifier(ScrollMotionObserver(
+            onOffset: { offset in
+                scrollOffset = offset
+                pinWhenSettled()
+            },
+            onSettled: { settled in
+                isScrollSettled = settled
+                pinWhenSettled()
+            }
+        ))
         .modifier(LoadEarlierOnOverscroll(isEnabled: model.hasEarlier) {
             Task { await loadEarlierKeepingPlace() }
         })
@@ -350,6 +370,13 @@ extension ThreadDetailView {
                 primaryAction()
             }
         }
+    }
+
+    /// `S1_WINDOW_PROBE=1` publishes the window of pages the list holds, so a UI
+    /// test can count how many pages one gesture added. Empty while reading.
+    private var debugWindowProbe: String {
+        guard DebugHooks.flag("S1_WINDOW_PROBE") else { return "" }
+        return "\(model.firstLoadedPage)-\(model.loadedPages)"
     }
 
     private var canCheckNewReplies: Bool {
@@ -375,7 +402,10 @@ extension ThreadDetailView {
         .background(post.pid == highlightedPid ? Color.accentColor.opacity(0.12) : Color.clear)
         .animation(.easeOut(duration: 0.35), value: highlightedPid)
         .onAppear {
+            // Appending does not move the top, so one anchor per page is enough;
+            // a request already in flight is dropped rather than queued.
             guard post.pid == visiblePosts.last?.pid else { return }
+            guard !model.isLoadingMore else { return }
             guard lastNextPageAnchor != topAnchorKey else { return }
             lastNextPageAnchor = topAnchorKey
             Task { await model.loadMore() }
@@ -419,7 +449,6 @@ extension ThreadDetailView {
                 }
                 if let origin, origin != pid { returnPid = origin }
                 didRestorePosition = true
-                ignoreOverscrollUntil = Date().addingTimeInterval(1.2)
                 visiblePid = pid
                 highlight(pid)
                 try? await Task.sleep(for: .milliseconds(Int(60 * motionScale)))
@@ -453,7 +482,6 @@ extension ThreadDetailView {
     /// Scrolls to a floor and flashes it so the jump has a visible landing spot.
     private func reveal(_ pid: String) {
         didRestorePosition = true
-        ignoreOverscrollUntil = Date().addingTimeInterval(1.2)
         if reduceMotion {
             visiblePid = pid
         } else {
@@ -477,7 +505,7 @@ extension ThreadDetailView {
     private var earlierRow: some View {
         if model.hasEarlier {
             EarlierRepliesRow(
-                isLoading: model.isLoadingMore,
+                isLoading: model.isLoadingEarlier,
                 page: model.firstLoadedPage - 1
             ) {
                 Task { await loadEarlierKeepingPlace(force: true) }
@@ -486,31 +514,75 @@ extension ThreadDetailView {
         }
     }
 
-    /// Loads the previous page and scrolls back to the post that was on top, so
-    /// prepending content does not shove the reader's place down the screen.
+    /// Loads the previous page and keeps the post the reader was looking at at
+    /// the top, so prepending a page does not shove their floor down the screen.
     private func loadEarlierKeepingPlace(force: Bool = false) async {
-        guard !model.isLoadingMore else { return }
-        guard Date() > ignoreOverscrollUntil else { return }
-        // Pulling past the top fires many times in a row; one page per approach.
+        // One page at a time: a trigger that arrives while the previous page is
+        // still loading is dropped, not queued. The view model raises its flag
+        // before it suspends, so this is checked ahead of every `await`.
+        guard !model.isLoadingEarlier, !model.isLoadingMore else { return }
+        // Pulling past the top fires on every frame until the list is back in
+        // place; the scroll gate holds one page per approach, this keeps the
+        // explicit row from doubling up on that same approach.
         if !force {
             guard lastEarlierPageAnchor != topAnchorKey else {
                 DebugHooks.log("S1 loadEarlier skipped: same approach (top=\(topAnchorKey))")
                 return
             }
         }
-        lastEarlierPageAnchor = topAnchorKey
-        let topBefore = visiblePid
-        guard let fallback = await model.loadEarlier() else {
+        guard let anchor = topVisiblePid, model.hasEarlier else {
+            DebugHooks.log("S1 loadEarlier: nothing to anchor (top=\(topAnchorKey))")
             return
         }
-        // Pin the post the reader was looking at; prepending a page would
-        // otherwise shove them up by exactly one page of replies.
-        let anchor = topBefore ?? fallback
+        DebugHooks.log("S1 loadEarlier start anchor=\(anchor) page=\(model.firstLoadedPage)")
+        lastEarlierPageAnchor = anchor
+        earlierAnchorPid = anchor
+        defer { earlierAnchorPid = nil }
+        // `loadEarlier` only reports failure after the prepend: a nil result
+        // here means nothing was inserted, so there is nothing to pin to.
+        guard await model.loadEarlier() != nil else { return }
+        // The reader's floor is exactly one page further down now. Put it back
+        // only once the pull is over: a live gesture owns the binding, and a
+        // stale one must not be restored after the content grew above it.
+        if isScrollSettled {
+            await pinTop(anchor)
+        } else {
+            pendingPinPid = anchor
+        }
+    }
+
+    /// Scrolls back to a floor whose page arrived while the reader was still
+    /// pulling. Doing it then would be overwritten by the gesture's own
+    /// write-back, so it waits for rest.
+    private func pinWhenSettled() {
+        guard let anchor = pendingPinPid, isScrollSettled else { return }
+        pendingPinPid = nil
+        DebugHooks.log("S1 pin top=\(anchor) at rest offset=\(Int(scrollOffset))")
+        Task { await pinTop(anchor) }
+    }
+
+    /// Puts `pid` back at the top of the list. Writing the id the binding already
+    /// holds is a no-op for SwiftUI and the binding may not have caught up with
+    /// the prepend yet, so it is blanked for one run-loop turn first: a stale
+    /// position must not survive a page being inserted above it.
+    private func pinTop(_ pid: String) async {
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            visiblePid = anchor
+        if visiblePid == pid {
+            withTransaction(transaction) { visiblePid = nil }
+            await Task.yield()
         }
+        withTransaction(transaction) { visiblePid = pid }
+    }
+
+    /// The floor at the top of the list. Blocked authors and the OP filter drop
+    /// rows, so the tracked id can point at a post that is not on screen at all.
+    private var topVisiblePid: String? {
+        let visible = visiblePosts
+        if let pid = visiblePid, visible.contains(where: { $0.pid == pid }) {
+            return pid
+        }
+        return visible.first?.pid
     }
 
     private var visiblePosts: [Post] {
@@ -579,8 +651,11 @@ extension ThreadDetailView {
 
     /// Stores the top-most visible post so the thread reopens in place.
     private func saveReadingPosition(_ pid: String?, immediate: Bool = false) {
+        // While a page is being prepended the binding walks over rows that just
+        // arrived; the reader's floor is the anchor taken before the request.
+        let target = model.isLoadingEarlier ? earlierAnchorPid : pid
         guard didRestorePosition,
-              let pid,
+              let pid = target,
               let post = model.posts.first(where: { $0.pid == pid }) else { return }
 
         let tid = model.summary.tid
