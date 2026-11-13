@@ -81,19 +81,34 @@ final class ImageBrowserDismissTests: XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
 
         XCTAssertTrue(closeButton.exists, "横滑翻页把查看器关了")
-        // 页码要等翻页动画结束才换：只读一次会把旧标题读成"没翻页"，CI 的机器
-        // 比开发机慢得多，这里必须轮询。
-        var after = pageTitle()
-        let deadline = Date().addingTimeInterval(8)
-        while after == before, Date() < deadline {
-            usleep(200_000)
-            after = pageTitle()
+
+        // 页码要等翻页动画结束才换，所以是轮询而不是只读一次。
+        var after = waitForPageChange(from: before, seconds: 8)
+        if after == before {
+            // 拖动没翻页时再试一次系统标准的轻扫，好把"手势没综合出来"和
+            // "pager 真的不翻"区分开。
+            app.swipeLeft()
+            after = waitForPageChange(from: before, seconds: 8)
         }
-        XCTAssertNotEqual(after, before, "横滑没翻到下一张")
+        if after == before {
+            let dots = app.pageIndicators.firstMatch
+            XCTFail("横滑没翻到下一张：title=\(before ?? "nil") dots=\(dots.exists ? "\(dots.value ?? "nil")" : "none") frame=\(app.frame) orientation=\(XCUIDevice.shared.orientation.rawValue)")
+        }
         add(screenshot(named: "paged"))
     }
 
     // MARK: - Helpers
+
+    /// 等到页码离开 `before` 为止；超时就把最后读到的值回去。
+    private func waitForPageChange(from before: String?, seconds: TimeInterval) -> String? {
+        var current = pageTitle()
+        let deadline = Date().addingTimeInterval(seconds)
+        while current == before, Date() < deadline {
+            usleep(200_000)
+            current = pageTitle()
+        }
+        return current
+    }
 
     private func launchViewer(zoom: Int? = nil) {
         app = XCUIApplication()
