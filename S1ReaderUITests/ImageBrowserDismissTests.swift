@@ -18,6 +18,14 @@ final class ImageBrowserDismissTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    override func tearDownWithError() throws {
+        // 用例失败时上一个 App 实例可能还开着，别把下一次 launch 卡在"杀掉它"上。
+        if let app, app.state != .notRunning {
+            app.terminate()
+        }
+        app = nil
+    }
+
     func testPullingDownClosesTheViewer() throws {
         launchViewer()
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
@@ -69,10 +77,18 @@ final class ImageBrowserDismissTests: XCTestCase {
 
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
-        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.1)
+        // 慢一点、松手前停一下：快速一甩在慢机器上不一定被 pager 当成翻页。
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
 
         XCTAssertTrue(closeButton.exists, "横滑翻页把查看器关了")
-        let after = pageTitle()
+        // 页码要等翻页动画结束才换：只读一次会把旧标题读成"没翻页"，CI 的机器
+        // 比开发机慢得多，这里必须轮询。
+        var after = pageTitle()
+        let deadline = Date().addingTimeInterval(8)
+        while after == before, Date() < deadline {
+            usleep(200_000)
+            after = pageTitle()
+        }
         XCTAssertNotEqual(after, before, "横滑没翻到下一张")
         add(screenshot(named: "paged"))
     }
