@@ -5,9 +5,34 @@ enum PostNode: Hashable {
     case text(AttributedString)
     case image(URL, isSmiley: Bool)
     /// A quoted block (`<div class="reply_wrap">` / `<blockquote>`), rendered as
-    /// its own indented card so it cannot be confused with the reply body.
-    /// `pid` is the quoted floor, when the original post linked to it.
-    case quote(AttributedString, pid: String?)
+    /// its own card so it cannot be confused with the reply body.
+    case quote(Quote)
+
+    /// The pieces of a quote the reader draws separately: the "作者 发表于 时间"
+    /// line as a caption, and the rest as the quoted body. `body` may hold a
+    /// nested quote, which is what quoting a post that itself quotes produces.
+    struct Quote: Hashable {
+        /// How many quote cards the reader is willing to stack. Discuz nests
+        /// quotes freely and three frames of tint read as a smudge, so anything
+        /// deeper than this is flattened into the innermost card's text.
+        static let maxDepth = 2
+
+        /// The header line as plain text, already stripped of its link.
+        var header: String?
+        /// Quoted text (and at most one nested quote).
+        var body: [PostNode]
+        /// The floor this quote points at, when the original linked to it.
+        var pid: String?
+
+        /// Whether a line of quoted HTML is Discuz's quote header rather than
+        /// quoted prose. S1 heads every quote with "作者 发表于 时间"; a long
+        /// first line is somebody's sentence, not a header.
+        static func looksLikeHeader(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, trimmed.count <= 60 else { return false }
+            return trimmed.contains("发表于")
+        }
+    }
 }
 
 /// Converts the HTML fragment returned by the mobile API into renderable nodes.
@@ -55,11 +80,12 @@ enum HTMLParser {
             switch node {
             case .text(let value):
                 text += String(value.characters)
-            case .quote(let value, _):
+            case .quote(let quote):
                 // A quote is its own block in the reader, so it needs a line of
                 // its own here too; otherwise "引用正文" glues the two together.
                 if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
-                text += String(value.characters)
+                if let header = quote.header { text += header + "\n" }
+                text += Self.plainText(nodes: quote.body)
                 text += "\n"
             case .image:
                 continue
@@ -78,6 +104,24 @@ enum HTMLParser {
             lines.append(trimmed)
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Flattens a node list to text, used for quote bodies. Images are dropped;
+    /// they are dropped from quotes by the parser in the first place.
+    private static func plainText(nodes: [PostNode]) -> String {
+        var text = ""
+        for node in nodes {
+            switch node {
+            case .text(let value):
+                text += String(value.characters)
+            case .quote(let quote):
+                if let header = quote.header { text += header + "\n" }
+                text += plainText(nodes: quote.body)
+            case .image:
+                continue
+            }
+        }
+        return text
     }
 
     /// Floor id of a `goto=findpost` link, used to make quotes tappable.
@@ -189,17 +233,28 @@ enum HTMLParser {
 
     // MARK: - Text attributes
 
+    /// Quoted text drops one type step (15pt body → 13pt, `.footnote`) so the
+    /// card is a layer rather than a second reply.
+    fileprivate static let quoteTextScale: CGFloat = 13.0 / 15.0
+
+    static func fontSize(base: CGFloat) -> CGFloat {
+        base * quoteTextScale
+    }
+
     fileprivate static func apply(_ style: Style, to string: inout AttributedString, scale: CGFloat = 1) {
         if style.quoteDepth > 0 {
-            // Quoted text is always smaller and secondary, whatever inline
-            // formatting the original author used.
-            var font = Font.system(size: style.size.map { min($0, 15) } ?? 15 * scale)
+            // Quoted text is one size step down, whatever inline formatting the
+            // original author used, and larger `font` sizes are clamped so a
+            // quote cannot outshout the reply around it. The colour is left to
+            // the card (QuoteStyle.body): it owns the fill the text sits on, so
+            // it is the only place that can hold the contrast floor.
+            var font = Font.system(size: fontSize(base: min(style.size ?? 15 * scale, 15 * scale)))
             if style.bold { font = font.bold() }
             if style.italic { font = font.italic() }
             string.font = font
-            string.foregroundColor = .secondary
             if let link = style.link {
                 string.link = link
+                string.foregroundColor = .accentColor
                 string.underlineStyle = .single
             } else if style.underline {
                 string.underlineStyle = .single
@@ -264,6 +319,19 @@ enum HTMLParser {
         case 6: return 30
         default: return 36
         }
+    }
+
+    /// Drops the whitespace and line breaks Discuz leaves at the edges of a
+    /// block, so a quote does not start with a blank line.
+    fileprivate static func trimmingEdges(_ string: AttributedString) -> AttributedString {
+        var copy = string
+        while let first = copy.characters.first, first == "\n" || first == " " {
+            copy.removeSubrange(copy.startIndex..<copy.index(copy.startIndex, offsetByCharacters: 1))
+        }
+        while let last = copy.characters.last, last == "\n" || last == " " {
+            copy.removeSubrange(copy.index(copy.endIndex, offsetByCharacters: -1)..<copy.endIndex)
+        }
+        return copy
     }
 
     fileprivate static func resolveURL(_ raw: String) -> URL? {
@@ -347,11 +415,21 @@ private struct PostBuilder {
     private var stack: [(tag: String, style: HTMLParser.Style)] = [("root", HTMLParser.Style())]
     private var skipping: String?
     private var atLineStart = true
-    private var quoteBuffer: AttributedString?
-    private var quotePID: String?
-    private var quoteDepth = 0
+    private var quoteFrames: [QuoteFrame] = []
+    /// One entry per open quote tag: whether that level got a card of its own
+    /// (levels past `PostNode.Quote.maxDepth` are flattened into the parent).
+    private var quoteLevels: [Bool] = []
     private var divDepth = 0
     private var quoteDivDepths: [Int] = []
+
+    /// A quote being collected: its text, the cards already completed inside it,
+    /// and the header/floor Discuz shipped with it.
+    private struct QuoteFrame {
+        var body: [PostNode] = []
+        var text = AttributedString()
+        var header: String?
+        var pid: String?
+    }
 
     init(html: String, scale: CGFloat = 1) {
         self.html = html
@@ -389,10 +467,7 @@ private struct PostBuilder {
             index = html.index(after: tagEnd)
             handleTag(rawTag)
         }
-        if quoteDepth > 0 {
-            quoteDepth = 0
-            emitQuoteBuffer(force: true)
-        }
+        if !quoteLevels.isEmpty { closeDanglingQuotes() }
         flush()
         return nodes
     }
@@ -519,10 +594,13 @@ private struct PostBuilder {
                 style.color = color
             }
         case "a":
-            // Linked quotes carry the target floor in their header link.
-            if quoteBuffer != nil, !isClosing, let href = attributes["href"],
-               let pid = HTMLParser.pidInFindPost(HTMLParser.decodeEntities(href)) {
-                quotePID = pid
+            // The link Discuz wraps its quote header in carries the floor being
+            // quoted. Only the header counts: a link further down is the quoted
+            // post talking about some other floor.
+            if !isClosing, let href = attributes["href"],
+               let pid = HTMLParser.pidInFindPost(HTMLParser.decodeEntities(href)),
+               isInQuoteHeader {
+                quoteFrames[quoteFrames.count - 1].pid = pid
             }
             update(tag: "a", isClosing: isClosing) { style in
                 guard let href = attributes["href"], let url = HTMLParser.resolveURL(href) else { return }
@@ -569,45 +647,63 @@ private struct PostBuilder {
     }
 
     private mutating func emit(_ string: AttributedString) {
-        if quoteBuffer != nil {
-            quoteBuffer! += string
-        } else {
+        if quoteFrames.isEmpty {
             text += string
+        } else {
+            quoteFrames[quoteFrames.count - 1].text += string
+        }
+    }
+
+    /// True while the innermost quote has not drawn anything but its header yet.
+    private var isInQuoteHeader: Bool {
+        guard let frame = quoteFrames.last else { return false }
+        return frame.body.isEmpty && frame.text.characters.isEmpty
+    }
+
+    private mutating func appendNode(_ node: PostNode) {
+        if quoteFrames.isEmpty {
+            nodes.append(node)
+        } else {
+            quoteFrames[quoteFrames.count - 1].body.append(node)
         }
     }
 
     private mutating func flush() {
-        var copy = text
-        while let first = copy.characters.first, first == "\n" || first == " " {
-            copy.removeSubrange(copy.startIndex..<copy.index(copy.startIndex, offsetByCharacters: 1))
+        // Text is buffered twice: once for the reply, once for the quote being
+        // collected, so whichever buffer is active is the one that lands.
+        var pending: AttributedString
+        if quoteFrames.isEmpty {
+            pending = text
+            text = AttributedString()
+        } else {
+            pending = quoteFrames[quoteFrames.count - 1].text
+            quoteFrames[quoteFrames.count - 1].text = AttributedString()
         }
-        while let last = copy.characters.last, last == "\n" || last == " " {
-            copy.removeSubrange(copy.index(copy.endIndex, offsetByCharacters: -1)..<copy.endIndex)
-        }
-        if !copy.characters.isEmpty {
-            nodes.append(.text(copy))
-        }
-        text = AttributedString()
         pendingNewlines = 0
+        let copy = HTMLParser.trimmingEdges(pending)
+        guard !copy.characters.isEmpty else { return }
+        appendNode(.text(copy))
     }
 
     // MARK: - Quotes
 
     private mutating func openQuote() {
         flush()
-        quoteDepth += 1
-        if quoteBuffer == nil { quoteBuffer = AttributedString() }
         var style = currentStyle
         style.quoteDepth += 1
         style.color = .secondary
         stack.append(("quote", style))
+
+        let drawsOwnCard = quoteLevels.count < PostNode.Quote.maxDepth
+        quoteLevels.append(drawsOwnCard)
+        if drawsOwnCard { quoteFrames.append(QuoteFrame()) }
     }
 
     private mutating func closeQuote() {
         popTag("quote")
-        quoteDepth = max(0, quoteDepth - 1)
-        emitQuoteBuffer(force: false)
-        if quoteDepth == 0 {
+        guard let drawsOwnCard = quoteLevels.popLast() else { return }
+        if drawsOwnCard { closeFrame() }
+        if quoteLevels.isEmpty {
             // Breaks inside the quote belong to the quote; they must not prepend a
             // blank line to the reply text that follows.
             pendingNewlines = 0
@@ -615,19 +711,47 @@ private struct PostBuilder {
         }
     }
 
-    private mutating func emitQuoteBuffer(force: Bool) {
-        guard quoteDepth == 0 || force, var copy = quoteBuffer else { return }
-        quoteBuffer = nil
-        while let first = copy.characters.first, first == "\n" || first == " " {
-            copy.removeSubrange(copy.startIndex..<copy.index(copy.startIndex, offsetByCharacters: 1))
+    /// Ends the innermost card and hands it to whatever contains it.
+    private mutating func closeFrame() {
+        guard !quoteFrames.isEmpty else { return }
+        flush()
+        var frame = quoteFrames.removeLast()
+        splitHeader(&frame)
+        guard !frame.body.isEmpty else { return }
+        appendNode(.quote(PostNode.Quote(header: frame.header, body: frame.body, pid: frame.pid)))
+    }
+
+    /// Discuz puts "作者 发表于 时间" on the quote's first line, inside the link
+    /// that points at the floor. Pulling it out lets the card draw it as a
+    /// caption instead of as a paragraph of quoted prose.
+    private func splitHeader(_ frame: inout QuoteFrame) {
+        guard frame.header == nil,
+              case .text(let first)? = frame.body.first,
+              let newline = first.characters.firstIndex(of: "\n") else { return }
+        let line = String(first.characters[first.startIndex..<newline])
+        guard PostNode.Quote.looksLikeHeader(line) else { return }
+
+        var rest = first
+        rest.removeSubrange(rest.startIndex..<rest.index(afterCharacter: newline))
+        rest = HTMLParser.trimmingEdges(rest)
+
+        // A quote that is nothing but a header would render as an empty card, so
+        // it stays whole text instead.
+        guard !rest.characters.isEmpty || frame.body.count > 1 else { return }
+        frame.header = line.trimmingCharacters(in: .whitespaces)
+        if rest.characters.isEmpty {
+            frame.body.removeFirst()
+        } else {
+            frame.body[0] = .text(rest)
         }
-        while let last = copy.characters.last, last == "\n" || last == " " {
-            copy.removeSubrange(copy.index(copy.endIndex, offsetByCharacters: -1)..<copy.endIndex)
+    }
+
+    /// Closes whatever quote tags were left open by the end of the post: an
+    /// unclosed `reply_wrap` div is common enough that the quote must survive it.
+    private mutating func closeDanglingQuotes() {
+        while let drawsOwnCard = quoteLevels.popLast() {
+            if drawsOwnCard { closeFrame() }
         }
-        if !copy.characters.isEmpty {
-            nodes.append(.quote(copy, pid: quotePID))
-        }
-        quotePID = nil
     }
 
     // MARK: - Images
@@ -635,11 +759,11 @@ private struct PostBuilder {
     private mutating func appendImage(_ attributes: [String: String]) {
         // Images inside a quote are dropped: the quote renders as one text card,
         // and the original picture is one tap away.
-        guard quoteBuffer == nil else { return }
+        guard quoteFrames.isEmpty else { return }
         guard let decoded = HTMLParser.imageSource(in: attributes),
               let url = HTMLParser.resolveURL(decoded) else { return }
         flush()
-        nodes.append(.image(url, isSmiley: HTMLParser.isSmiley(url)))
+        appendNode(.image(url, isSmiley: HTMLParser.isSmiley(url)))
     }
 
     // MARK: - Style stack

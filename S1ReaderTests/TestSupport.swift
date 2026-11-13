@@ -20,8 +20,35 @@ extension PostNode {
     }
 
     var quote: (text: String, pid: String?)? {
-        if case .quote(let value, let pid) = self { return (String(value.characters), pid) }
+        if case .quote(let value) = self { return (Self.plainText(value.body), value.pid) }
         return nil
+    }
+
+    /// The caption row: "作者 发表于 时间", when the quote shipped one.
+    var quoteHeader: String? {
+        if case .quote(let value) = self { return value.header }
+        return nil
+    }
+
+    /// How many quote cards the node list would draw: a nested quote counts.
+    var quoteDepth: Int {
+        switch self {
+        case .quote(let value):
+            return 1 + (value.body.map(\.quoteDepth).max() ?? 0)
+        case .text, .image:
+            return 0
+        }
+    }
+
+    static func plainText(_ nodes: [PostNode]) -> String {
+        nodes.map { node in
+            switch node {
+            case .text(let value): return String(value.characters)
+            case .quote(let value): return Self.plainText(value.body)
+            case .image: return ""
+            }
+        }
+        .joined()
     }
 
     var image: (url: URL, isSmiley: Bool)? {
@@ -31,7 +58,12 @@ extension PostNode {
 
     var attributed: AttributedString? {
         switch self {
-        case .text(let value), .quote(let value, _): return value
+        case .text(let value): return value
+        case .quote(let value):
+            for node in value.body {
+                if case .text(let text) = node { return text }
+            }
+            return nil
         case .image: return nil
         }
     }

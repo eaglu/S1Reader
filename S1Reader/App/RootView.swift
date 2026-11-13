@@ -39,6 +39,21 @@ struct RootView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        // `S1_OPEN=quotes` replaces the whole app rather than presenting a cover:
+        // the gallery exists only to be screenshotted, and a cover raced the
+        // first layout often enough to make that unreliable.
+        if DebugHooks.string("S1_OPEN") == "quotes" {
+            QuoteGalleryView()
+        } else {
+            tabs
+        }
+        #else
+        tabs
+        #endif
+    }
+
+    private var tabs: some View {
         TabView(selection: $tab) {
             NavigationStack(path: $path) {
                 BoardListView()

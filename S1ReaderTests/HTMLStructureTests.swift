@@ -87,10 +87,22 @@ final class HTMLStructureTests: XCTestCase {
         XCTAssertEqual(nodes.first?.quote?.text, "引用")
     }
 
-    func testQuoteIsSecondaryAndSmaller() {
+    func testQuoteBodyIsSmallerButLeavesItsColourToTheCard() {
+        // The card knows which fill the text sits on, so it is the only place that
+        // can hold the contrast floor (see QuoteStyleTests). The parser only
+        // shrinks the text; baking `.secondary` in here would drop the quote body
+        // to about 3.5:1 on the light card.
         let quote = Fixture.parse("<div class=\"reply_wrap\">引用</div>")[0]
-        XCTAssertTrue(quote.attributed?.isSecondary == true)
-        XCTAssertTrue(quote.attributed?.hasFont == true, "quotes are drawn at a fixed smaller size")
+        XCTAssertTrue(quote.attributed?.hasFont == true, "quotes are drawn at a smaller size")
+        XCTAssertFalse(quote.attributed?.isSecondary == true)
+    }
+
+    func testQuotedTextStepsDownOneTypeSize() {
+        // The reply body tops out at 15pt, so the quote body lands on 13pt
+        // (`.footnote`): one step down, whatever `font` the author asked for.
+        XCTAssertEqual(HTMLParser.fontSize(base: 15), 13, accuracy: 0.01)
+        XCTAssertEqual(HTMLParser.fontSize(base: 24), 20.8, accuracy: 0.01)
+        XCTAssertLessThan(HTMLParser.fontSize(base: 15), 15)
     }
 
     func testQuotedFloorComesFromTheHeaderLink() {
@@ -103,17 +115,112 @@ final class HTMLStructureTests: XCTestCase {
         XCTAssertEqual(nodes.last?.text, "回复")
     }
 
-    func testNestedQuotesCollapseToOneCard() {
+    // MARK: - Quote header
+
+    func testQuoteHeaderIsSplitFromTheBody() {
+        // What S1 actually ships: the author and time are one link on the quote's
+        // first line. The card draws that line as a caption, so the body must not
+        // repeat it.
+        let html = """
+        <div class="reply_wrap"><a href="forum.php?mod=redirect&amp;goto=findpost&amp;ptid=1&amp;pid=9001">
+        C0s4qmLH9eF9P3w 发表于 2026-11-13 10:34</a><br />没想到 Hydrogen能斩杀 1017</div>
+        """
+        let quote = Fixture.parse(html)[0]
+        XCTAssertEqual(quote.quoteHeader, "C0s4qmLH9eF9P3w 发表于 2026-11-13 10:34")
+        XCTAssertEqual(quote.quote?.text, "没想到 Hydrogen能斩杀 1017")
+        XCTAssertEqual(quote.quote?.pid, "9001")
+    }
+
+    func testQuoteWithoutHeaderKeepsEveryLine() {
+        let quote = Fixture.parse("<div class=\"reply_wrap\">第一行<br />第二行</div>")[0]
+        XCTAssertNil(quote.quoteHeader)
+        XCTAssertEqual(quote.quote?.text, "第一行\n第二行")
+    }
+
+    func testLongFirstLineIsProseNotAHeader() {
+        // A quote of somebody's sentence that happens to mention 发表于 is body.
+        let line = String(repeating: "发表于很长的一句话", count: 8)
+        let quote = Fixture.parse("<div class=\"reply_wrap\">\(line)<br />后续</div>")[0]
+        XCTAssertNil(quote.quoteHeader)
+        XCTAssertTrue(quote.quote?.text.hasPrefix("发表于") == true)
+    }
+
+    func testQuoteWithoutFindPostLinkHasNoFloor() {
+        let html = "<div class=\"reply_wrap\">某人 发表于 2024-1-1 10:00<br />引用正文</div>"
+        let quote = Fixture.parse(html)[0]
+        XCTAssertEqual(quote.quoteHeader, "某人 发表于 2024-1-1 10:00")
+        XCTAssertNil(quote.quote?.pid, "no link, no floor to jump to")
+        XCTAssertEqual(quote.quote?.text, "引用正文")
+    }
+
+    func testLinkInQuotedBodyDoesNotBecomeTheFloor() {
+        // Only the header link points at the quoted floor; a link further down is
+        // the quoted post talking about some other floor.
+        let html = """
+        <div class="reply_wrap">某甲 发表于 2024-1-1 10:00<br />看<a href="forum.php?mod=redirect&amp;goto=findpost&amp;pid=55">这楼</a></div>
+        """
+        XCTAssertNil(Fixture.parse(html)[0].quote?.pid)
+    }
+
+    func testHeaderAloneIsKeptAsBodySoTheCardIsNotEmpty() {
+        // 缺字段: a quote that lost its body would otherwise draw a caption over
+        // an empty card.
+        let html = "<div class=\"reply_wrap\">某人 发表于 2024-1-1 10:00</div>"
+        let quote = Fixture.parse(html)[0]
+        XCTAssertNil(quote.quoteHeader)
+        XCTAssertEqual(quote.quote?.text, "某人 发表于 2024-1-1 10:00")
+    }
+
+    // MARK: - Nested quotes
+
+    func testNestedQuoteBecomesItsOwnCard() {
         let html = "<div class=\"reply_wrap\">甲<blockquote>乙</blockquote>丙</div>正文"
         let nodes = Fixture.parse(html)
-        XCTAssertEqual(nodes.count, 2, "a quote inside a quote stays one card")
-        XCTAssertTrue(nodes[0].quote?.text.contains("甲") == true)
-        XCTAssertTrue(nodes[0].quote?.text.contains("乙") == true)
+        XCTAssertEqual(nodes.count, 2, "the reply keeps one quote block")
+        XCTAssertEqual(nodes[0].quoteDepth, 2)
+        XCTAssertEqual(nodes[0].quote?.text, "甲乙丙")
+        XCTAssertEqual(nodes[1].text, "正文")
+    }
+
+    func testNestedQuoteKeepsItsOwnHeaderAndFloor() {
+        let html = """
+        <div class="reply_wrap">
+        <a href="forum.php?mod=redirect&amp;goto=findpost&amp;pid=1">楼主 发表于 2026-11-13 10:34</a><br />外层
+        <blockquote>
+        <a href="forum.php?mod=redirect&amp;goto=findpost&amp;pid=2">层主 发表于 2026-11-13 10:20</a><br />内层
+        </blockquote></div>
+        """
+        let outer = Fixture.parse(html)[0]
+        XCTAssertEqual(outer.quoteHeader, "楼主 发表于 2026-11-13 10:34")
+        XCTAssertEqual(outer.quote?.pid, "1")
+        guard case .quote(let quote) = outer else { return XCTFail("expected a quote") }
+        let inner = quote.body.compactMap { node -> PostNode.Quote? in
+            if case .quote(let value) = node { return value }
+            return nil
+        }.first
+        XCTAssertEqual(inner?.header, "层主 发表于 2026-11-13 10:20")
+        XCTAssertEqual(inner?.pid, "2")
+        XCTAssertEqual(inner.map { PostNode.plainText($0.body) }, "内层")
+    }
+
+    func testThirdLevelIsFlattenedIntoTheSecondCard() {
+        // Two frames of tint is the most the card can draw before it reads as a
+        // smudge, so a third level keeps its words and loses its card.
+        let html = "<div class=\"reply_wrap\">甲<blockquote>乙<blockquote>丙</blockquote></blockquote></div>"
+        let quote = Fixture.parse(html)[0]
+        XCTAssertEqual(quote.quoteDepth, 2)
+        XCTAssertEqual(quote.quote?.text, "甲乙丙")
     }
 
     func testUnclosedQuoteStillRenders() {
         let nodes = Fixture.parse("<div class=\"reply_wrap\">没有结束标签")
         XCTAssertEqual(nodes.first?.quote?.text, "没有结束标签")
+    }
+
+    func testUnclosedNestedQuoteStillEmitsBothCards() {
+        let nodes = Fixture.parse("<div class=\"reply_wrap\">甲<blockquote>乙")
+        XCTAssertEqual(nodes.first?.quoteDepth, 2)
+        XCTAssertEqual(nodes.first?.quote?.text, "甲乙")
     }
 
     // MARK: - Images

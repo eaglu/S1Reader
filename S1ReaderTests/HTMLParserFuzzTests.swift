@@ -30,10 +30,7 @@ final class HTMLParserFuzzTests: XCTestCase {
 
     func testUnclosedQuoteDivStillEmitsTheQuote() {
         let nodes = HTMLParser.parse(#"<div class="reply_wrap">引用正文没有收尾"#)
-        let quotes = nodes.compactMap { node -> String? in
-            if case .quote(let text, _) = node { return String(text.characters) }
-            return nil
-        }
+        let quotes = nodes.compactMap { $0.quote?.text }
         XCTAssertEqual(quotes, ["引用正文没有收尾"])
     }
 

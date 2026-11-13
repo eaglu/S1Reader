@@ -191,7 +191,7 @@ struct PostContentView: View {
 
     private enum Block {
         case text(Text)
-        case quote(AttributedString, String?)
+        case quote(PostNode.Quote)
         case image(URL)
     }
 
@@ -221,9 +221,9 @@ struct PostContentView: View {
                     flush()
                     result.append(.image(url))
                 }
-            case .quote(let attributed, let pid):
+            case .quote(let quote):
                 flush()
-                result.append(.quote(attributed, pid))
+                result.append(.quote(quote))
             }
         }
         flush()
@@ -238,22 +238,8 @@ struct PostContentView: View {
                     text
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                case .quote(let attributed, let pid):
-                    if let pid {
-                        Button {
-                            onQuoteTap(pid)
-                        } label: {
-                            QuoteCard(attributed: attributed, tappable: true)
-                        }
-                        .buttonStyle(QuoteCardButtonStyle())
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("引用的回复")
-                        .accessibilityHint("双击跳到被引用的楼层")
-                        .accessibilityAddTraits(.isButton)
-                    } else {
-                        QuoteCard(attributed: attributed, tappable: false)
-                            .textSelection(.enabled)
-                    }
+                case .quote(let quote):
+                    QuoteCard(quote: quote, onQuoteTap: onQuoteTap)
                 case .image(let url):
                     Button {
                         onImageTap(url)
@@ -340,31 +326,151 @@ struct PostContentView: View {
     }
 }
 
-/// One quoted block. Tappable quotes get a brighter spine and a press state so
-/// it reads as a control without looking like a second reply.
+/// One quoted block: a caption row with the original author and time, a hairline,
+/// then the quoted body one size step below the reply.
+///
+/// A tappable quote marks itself with a turnaround glyph on the caption row
+/// rather than a coloured spine, and keeps the press feedback, so it reads as a
+/// control without shouting over the reply it sits in.
 private struct QuoteCard: View {
-    let attributed: AttributedString
-    let tappable: Bool
+    let quote: PostNode.Quote
+    /// 1 for a quote in the reply itself; nested cards are indented and untinted.
+    var depth = 1
+    var onQuoteTap: (String) -> Void = { _ in }
+    /// Nested cards are drawn inside their parent's button, where a button of
+    /// their own would never receive the tap; they are display-only.
+    var interactive = true
+
+    private var isControl: Bool { interactive && quote.pid != nil }
+    private var isNested: Bool { depth > 1 }
 
     var body: some View {
-        HStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                .fill(Color.accentColor.opacity(tappable ? 0.8 : 0.5))
-                .frame(width: 3)
-                .padding(.vertical, 6)
-
-            Text(attributed)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 8)
-                .padding(.leading, 9)
-                .padding(.trailing, 10)
+        if let pid = quote.pid, isControl {
+            Button {
+                onQuoteTap(pid)
+            } label: {
+                card
+            }
+            .buttonStyle(QuoteCardButtonStyle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("引用的回复")
+            .accessibilityHint("双击跳到被引用的楼层")
+            .accessibilityAddTraits(.isButton)
+        } else {
+            card.textSelection(.enabled)
         }
-        .background(
-            Color(uiColor: .tertiarySystemFill),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let header = quote.header {
+                headerRow(header)
+                Rectangle()
+                    .fill(QuoteStyle.hairline)
+                    .frame(height: 0.5)
+                    .padding(.top, 6)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                QuoteBody(quote: quote, depth: depth, onQuoteTap: onQuoteTap)
+                // Without a caption row the glyph has nowhere else to go.
+                if quote.header == nil, isControl { affordance }
+            }
+            .padding(.top, quote.header == nil ? 0 : 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background {
+            if !isNested {
+                RoundedRectangle(cornerRadius: QuoteStyle.cornerRadius, style: .continuous)
+                    .fill(QuoteStyle.fill)
+            }
+        }
+        .padding(.leading, isNested ? QuoteStyle.nestIndent : 0)
+        .contentShape(RoundedRectangle(cornerRadius: QuoteStyle.cornerRadius, style: .continuous))
+    }
+
+    private func headerRow(_ header: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(header)
+                .font(.caption2)
+                .foregroundStyle(QuoteStyle.header)
+                .fixedSize(horizontal: false, vertical: true)
+            if isControl {
+                Spacer(minLength: 4)
+                affordance
+            }
+        }
+    }
+
+    private var affordance: some View {
+        Image(systemName: QuoteStyle.affordanceSymbol)
+            .font(.system(size: QuoteStyle.affordanceSize, weight: .semibold))
+            .foregroundStyle(QuoteStyle.header)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The quoted text and any quote nested inside it. Consecutive text runs are
+/// folded into one `Text` so a smiley or a line break cannot split a sentence
+/// into separate paragraphs.
+private struct QuoteBody: View {
+    let quote: PostNode.Quote
+    let depth: Int
+    var onQuoteTap: (String) -> Void = { _ in }
+
+    private enum Segment {
+        case text(Text)
+        case quote(PostNode.Quote)
+    }
+
+    private var segments: [Segment] {
+        var result: [Segment] = []
+        var pieces: [Text] = []
+
+        func flush() {
+            guard !pieces.isEmpty else { return }
+            result.append(.text(pieces.reduce(Text(""), +)))
+            pieces.removeAll()
+        }
+
+        for node in quote.body {
+            switch node {
+            case .text(let attributed):
+                pieces.append(Text(attributed))
+            case .quote(let nested):
+                flush()
+                result.append(.quote(nested))
+            case .image:
+                // The parser drops images inside quotes; the original picture is
+                // one tap away.
+                continue
+            }
+        }
+        flush()
+        return result
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .text(let text):
+                    text
+                        .foregroundStyle(QuoteStyle.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .quote(let nested):
+                    QuoteCard(
+                        quote: nested,
+                        depth: depth + 1,
+                        onQuoteTap: onQuoteTap,
+                        interactive: false
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -372,10 +478,11 @@ private struct QuoteCardButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: QuoteStyle.cornerRadius, style: .continuous)
                     .fill(configuration.isPressed ? Color.primary.opacity(0.06) : Color.clear)
             }
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
+
