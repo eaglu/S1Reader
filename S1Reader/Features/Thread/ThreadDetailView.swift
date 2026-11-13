@@ -113,6 +113,11 @@ struct ThreadDetailView: View {
             await PostBodyCache.shared.warm(posts: model.posts, scale: HTMLParser.textScale(for: mainDynamicTypeSize))
             registerThreadImages()
         }
+        // A vote cast on this device is remembered per account; re-read it when
+        // the reader logs in or out while the thread is open.
+        .task(id: app.member?.uid) {
+            model.syncPollVoterRecord(uid: app.member?.uid ?? "")
+        }
         .task {
             await model.loadIfNeeded()
             if startAtLastPage {
@@ -308,6 +313,14 @@ extension ThreadDetailView {
 
                 ForEach(visiblePosts) { post in
                     postRow(post)
+                    // The poll belongs to the thread, not to a floor, but it is
+                    // read directly under the first post: only when that post is
+                    // actually on screen (a jump straight to page 400 has no
+                    // head, and a ballot floating above 40 replies would be a
+                    // stranger thing than no ballot at all).
+                    if post.isFirst {
+                        pollSection
+                    }
                     Divider()
                 }
 
@@ -409,6 +422,34 @@ extension ThreadDetailView {
             guard lastNextPageAnchor != topAnchorKey else { return }
             lastNextPageAnchor = topAnchorKey
             Task { await model.loadMore() }
+        }
+    }
+
+    /// The ballot under the first post. Hidden entirely while the thread has no
+    /// poll, so a normal thread renders exactly as before.
+    @ViewBuilder
+    private var pollSection: some View {
+        if let poll = model.poll {
+            PollView(
+                poll: poll,
+                selection: model.selectedPollOptionIDs,
+                votedOptionIDs: model.pollVotedOptionIDs,
+                hasVoted: model.hasVotedPoll,
+                isClosed: model.isPollClosed,
+                isLoggedIn: app.isLoggedIn,
+                canVote: model.canVotePoll(isLoggedIn: app.isLoggedIn),
+                isSubmitting: model.isVotingPoll,
+                errorMessage: model.pollVoteError,
+                onToggle: { model.togglePollOption($0) },
+                onSubmit: {
+                    Task {
+                        await model.submitPollVote(uid: app.member?.uid ?? "")
+                        guard model.pollVoteError == nil else { return }
+                        toast = ToastMessage(text: "投票成功", style: .success)
+                    }
+                },
+                onLogin: { sheet = .login }
+            )
         }
     }
 

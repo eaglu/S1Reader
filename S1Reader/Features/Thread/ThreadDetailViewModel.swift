@@ -31,6 +31,27 @@ final class ThreadDetailViewModel {
     /// queued behind it.
     private(set) var isLoadingEarlier = false
 
+    // MARK: - Poll
+
+    /// The thread's poll, when it has one. It lives next to the first post, not
+    /// inside it, and survives page jumps: every page response carries it.
+    private(set) var poll: Poll?
+    /// Option ids this account already voted for, from `PollVoteStore`.
+    private(set) var pollVotedOptionIDs: Set<String> = []
+    /// Options ticked in the ballot but not sent yet.
+    var selectedPollOptionIDs: Set<String> = []
+    private(set) var isVotingPoll = false
+    /// Failure text under the ballot; also carries the "too many choices" hint.
+    var pollVoteError: String?
+
+    private var threadFID = ""
+    private var pollThreadIsClosed = false
+    /// A page fetched as a guest cannot say whether this account voted.
+    private var pollPageIsGuest = true
+    /// `allowvote` empty on a signed-in, open thread means the account already
+    /// voted: Discuz's permission is "group may vote && has not voted && open".
+    private var pollInferredVoted = false
+
     let pager: PagedListLoader<Post, ThreadPage>
 
     /// One page of a thread. Injectable so tests can page without a network.
@@ -94,6 +115,74 @@ final class ThreadDetailViewModel {
     }
 
     func isFresh(_ pid: String) -> Bool { freshPids.contains(pid) }
+
+    // MARK: - Poll state
+
+    var hasVotedPoll: Bool { !pollVotedOptionIDs.isEmpty || pollInferredVoted }
+
+    var isPollClosed: Bool { (poll?.isClosed() ?? false) || pollThreadIsClosed }
+
+    /// True when the ballot should accept taps: a poll exists, the account is
+    /// signed in, the server allows a vote, and nothing was voted or closed.
+    func canVotePoll(isLoggedIn: Bool) -> Bool {
+        guard let poll, isLoggedIn, !isPollClosed, !hasVotedPoll else { return false }
+        return poll.allowsVoting
+    }
+
+    /// Loads the local "I voted" record for the account now signed in.
+    func syncPollVoterRecord(uid: String) {
+        guard !uid.isEmpty else {
+            pollVotedOptionIDs = []
+            return
+        }
+        pollVotedOptionIDs = Set(PollVoteStore.shared.votedOptions(tid: summary.tid, uid: uid))
+    }
+
+    func togglePollOption(_ id: String) {
+        guard let poll, !isVotingPoll else { return }
+        pollVoteError = nil
+        if poll.multiple {
+            if selectedPollOptionIDs.contains(id) {
+                selectedPollOptionIDs.remove(id)
+            } else if selectedPollOptionIDs.count < poll.maxChoices {
+                selectedPollOptionIDs.insert(id)
+            } else {
+                pollVoteError = "最多只能选择 \(poll.maxChoices) 项"
+            }
+        } else {
+            selectedPollOptionIDs = selectedPollOptionIDs.contains(id) ? [] : [id]
+        }
+    }
+
+    /// Sends the ballot and folds the result into the poll in place, so the
+    /// reply list never reloads for a vote.
+    func submitPollVote(uid: String) async {
+        guard let poll, !isVotingPoll, !selectedPollOptionIDs.isEmpty else { return }
+        let chosen = selectedPollOptionIDs
+        isVotingPoll = true
+        pollVoteError = nil
+        defer { isVotingPoll = false }
+
+        do {
+            try await APIClient.shared.votePoll(
+                tid: summary.tid,
+                fid: threadFID,
+                optionIDs: Array(chosen)
+            )
+        } catch {
+            pollVoteError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            return
+        }
+
+        self.poll = poll.applyingVote(chosen)
+        pollVotedOptionIDs = chosen
+        pollInferredVoted = true
+        selectedPollOptionIDs = []
+        if !uid.isEmpty {
+            PollVoteStore.shared.record(tid: summary.tid, uid: uid, options: Array(chosen))
+        }
+    }
 
     /// Dismisses a non-blocking error notice without refetching.
     func clearError() { pager.clearError() }
@@ -225,6 +314,18 @@ final class ThreadDetailViewModel {
             title = info.subject
             totalPosts = info.replies + 1
             views = info.views
+            if !info.fid.isEmpty { threadFID = info.fid }
+            pollThreadIsClosed = info.isClosed
+        }
+        if let fresh = result.poll {
+            poll = fresh
+            pollPageIsGuest = !result.member.isLoggedIn
+            // Drop ticks for options the server no longer offers.
+            let ids = Set(fresh.options.map(\.id))
+            selectedPollOptionIDs.formIntersection(ids)
+            pollInferredVoted = !pollPageIsGuest
+                && !fresh.allowsVoting
+                && !fresh.isClosed()
         }
         // Another page exists while the loaded page is not the last one.
         hasMore = page < pageCount && !posts.isEmpty

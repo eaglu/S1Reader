@@ -110,9 +110,11 @@ struct ThreadInfo: Decodable, Sendable {
     let author: String
     let dateline: String
     let isClosed: Bool
+    /// Board the thread lives in, needed when casting a poll vote.
+    let fid: String
 
     enum CodingKeys: String, CodingKey {
-        case tid, subject, replies, views, author, dateline, closed
+        case tid, subject, replies, views, author, dateline, closed, fid
     }
 
     init(from decoder: Decoder) throws {
@@ -124,6 +126,7 @@ struct ThreadInfo: Decodable, Sendable {
         author = HTMLParser.decodeEntities(container.flexString(.author))
         dateline = container.flexString(.dateline)
         isClosed = container.flexBool(.closed)
+        fid = container.flexString(.fid)
     }
 }
 
@@ -203,9 +206,13 @@ struct ThreadPage: Decodable, Sendable {
     let thread: ThreadInfo?
     let posts: [Post]
     let perPage: Int
+    /// The thread's poll, when it has one. Decoded leniently: a poll the app
+    /// cannot read must never take the posts down with it.
+    let poll: Poll?
 
     enum CodingKeys: String, CodingKey {
         case thread, postlist, ppp
+        case special_poll
     }
 
     init(from decoder: Decoder) throws {
@@ -214,5 +221,6 @@ struct ThreadPage: Decodable, Sendable {
         thread = try? container.decodeIfPresent(ThreadInfo.self, forKey: .thread)
         posts = (try? container.decode([Post].self, forKey: .postlist)) ?? []
         perPage = max(1, container.flexInt(.ppp))
+        poll = try? container.decodeIfPresent(Poll.self, forKey: .special_poll)
     }
 }

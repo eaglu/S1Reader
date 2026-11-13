@@ -359,6 +359,60 @@ actor APIClient {
         return envelope.variables?.pid
     }
 
+    /// Casts a vote in the thread's poll.
+    ///
+    /// Discuz takes this through `forum.php?mod=misc&action=votepoll`, which the
+    /// mobile API exposes as `module=pollvote`. The chosen options travel as
+    /// repeated `pollanswers[]` fields, one per option id; the server rejects a
+    /// second vote, a closed poll or a guest with a `Message` instead of the
+    /// success envelope.
+    func votePoll(tid: String, fid: String?, optionIDs: [String]) async throws {
+        guard let formhash, !formhash.isEmpty else { throw APIError.notLoggedIn }
+        guard !optionIDs.isEmpty else { throw APIError.server("请至少选择一个选项") }
+
+        var fields: [(String, String)] = [("tid", tid)]
+        if let fid, !fid.isEmpty { fields.append(("fid", fid)) }
+        fields.append(("formhash", formhash))
+        fields.append(("pollsubmit", "yes"))
+        fields.append(contentsOf: optionIDs.map { ("pollanswers[]", $0) })
+
+        let data = try await rawPost("pollvote", fields)
+        let envelope = try decodeEnvelope(EmptyVariables.self, from: data)
+        if let message = envelope.message {
+            let value = message.value ?? ""
+            if value.contains("succeed") || value.contains("success") { return }
+            throw APIError.server(Self.pollVoteMessage(value: value, text: message.text))
+        }
+    }
+
+    /// Turns Discuz's message keys into something a reader can act on. The
+    /// server's own `messagestr` is untranslated here (`mobile:group_nopermission`),
+    /// so known keys win and anything unknown falls back to the raw text.
+    static func pollVoteMessage(value: String, text: String?) -> String {
+        let key = value.split(separator: "/").first.map(String.init) ?? value
+        switch key {
+        case "thread_poll_succeed":
+            return "投票成功"
+        case "group_nopermission":
+            return "当前账号没有投票权限，请先登录"
+        case "thread_poll_closed":
+            return "主题已关闭，无法投票"
+        case "poll_overdue":
+            return "投票已经结束"
+        case "thread_poll_voted":
+            return "这个账号已经投过票了"
+        case "poll_choose_most":
+            return "选择的项数超过了限制"
+        case "submit_invalid":
+            return "提交已过期，请退出帖子重新进入后再试"
+        default:
+            break
+        }
+        let fallback = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if fallback.isEmpty || fallback.hasPrefix("mobile:") { return "投票失败，请稍后重试" }
+        return fallback
+    }
+
     /// Adds the thread to (or removes it from) the user's favorites.
     func setFavorite(tid: String, favorite: Bool) async throws {
         guard let formhash, !formhash.isEmpty else { throw APIError.notLoggedIn }
@@ -409,6 +463,11 @@ actor APIClient {
     }
 
     private func rawPost(_ module: String, _ fields: [String: String]) async throws -> Data {
+        try await rawPost(module, fields.map { ($0.key, $0.value) })
+    }
+
+    /// Field pairs, so a key may repeat (`pollanswers[]`).
+    private func rawPost(_ module: String, _ fields: [(String, String)]) async throws -> Data {
         guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw APIError.badURL
         }
@@ -424,7 +483,10 @@ actor APIClient {
         request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("https://stage1st.com/2b/", forHTTPHeaderField: "Referer")
         request.httpBody = Self.formEncode(fields)
+        return try await send(request)
+    }
 
+    private func send(_ request: URLRequest) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
@@ -454,6 +516,11 @@ actor APIClient {
     /// Exposed for tests: the body must survive keys and values with spaces,
     /// ampersands, plus signs and Chinese text.
     static func formEncode(_ fields: [String: String]) -> Data {
+        formEncode(fields.map { ($0.key, $0.value) })
+    }
+
+    /// Same encoding, but keeps the caller's order and lets a key repeat.
+    static func formEncode(_ fields: [(String, String)]) -> Data {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         let body = fields
