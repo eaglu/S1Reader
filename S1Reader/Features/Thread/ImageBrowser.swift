@@ -160,7 +160,7 @@ struct ImageBrowser: View {
         GeometryReader { proxy in
             Color.clear
                 .onAppear { viewerSize = proxy.size }
-                .onChange(of: proxy.size) { viewerSize = $0 }
+                .onChange(of: proxy.size) { _, size in viewerSize = size }
         }
     }
 
