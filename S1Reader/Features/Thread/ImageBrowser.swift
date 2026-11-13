@@ -46,6 +46,12 @@ struct ImageBrowser: View {
                 .opacity(1 - 0.7 * dismissProgress)
                 .scaleEffect(1 - 0.06 * dismissProgress)
                 .offset(pull)
+                // One container element the tests can ask "is the picture zoomed
+                // in?" — the gesture arbitration depends on it, and the two
+                // answers lead to very different drags.
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("image-viewer")
+                .accessibilityValue(isPictureZoomed ? "zoomed" : "fit")
                 .accessibilityAction(.escape) { dismiss() }
         }
         .background(sizeReader)
@@ -299,7 +305,14 @@ private struct ZoomableImage: View {
                     offset = .zero
                 }
                 .onChange(of: zoom) { onZoomChanged(zoom > 1) }
-                .onAppear(perform: applyDebugZoom)
+                .onAppear {
+                    applyDebugZoom()
+                    // Say it out loud on the way in as well: the viewer's
+                    // gesture arbitration reads this, and a page that appears
+                    // already zoomed (S1_ZOOM) must not depend on a change
+                    // event that a fast machine might coalesce away.
+                    onZoomChanged(currentZoom > 1)
+                }
                 .accessibilityLabel("图片")
         }
         .background(Color.black)

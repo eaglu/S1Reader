@@ -110,6 +110,11 @@ final class ImageBrowserDismissTests: XCTestCase {
         return current
     }
 
+    /// 查看器容器：`value` 是 `fit` 或 `zoomed`，手势怎么分工就看这个。
+    private var viewer: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "image-viewer").firstMatch
+    }
+
     private func launchViewer(zoom: Int? = nil) {
         app = XCUIApplication()
         app.launchEnvironment["S1_OPEN"] = "thread:\(Self.threadID)"
@@ -122,8 +127,16 @@ final class ImageBrowserDismissTests: XCTestCase {
             XCTFail("图片查看器没打开：这些用例要网络")
             return
         }
-        // 等第一张图真正解码出来，免得手势落在还没铺开的内容上。
-        usleep(3_000_000)
+        // 等查看器自己报出缩放状态，而不是拿一个固定的 sleep 去猜：慢机器上
+        // 拖在"还没进入状态"的查看器上，两种手势的结论会变得完全不一样。
+        let expected = zoom == nil ? "fit" : "zoomed"
+        let deadline = Date().addingTimeInterval(20)
+        while (viewer.value as? String) != expected, Date() < deadline {
+            usleep(200_000)
+        }
+        XCTAssertEqual(viewer.value as? String, expected, "查看器没有进入预期的缩放状态")
+        // 再等图片真正解码出来，免得手势落在还没铺开的内容上。
+        usleep(1_000_000)
     }
 
     /// 「5 / 12」这种页码标题；单张图时是「图片」，返回 nil 也无所谓。
