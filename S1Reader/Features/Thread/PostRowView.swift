@@ -264,7 +264,6 @@ struct PostContentView: View {
                 switch block {
                 case .text(let text):
                     text
-                        .unlessDiagnostic("S1_PERF_NO_SELECTION") { $0.textSelection(.enabled) }
                         .fixedSize(horizontal: false, vertical: true)
                 case .quote(let quote):
                     QuoteCard(quote: quote, onQuoteTap: onQuoteTap)
@@ -294,6 +293,12 @@ struct PostContentView: View {
                 }
             }
         }
+        // Selection is switched on once for the whole body instead of once per
+        // text run. Every `.textSelection` adds its own text-interaction layer,
+        // and a reply with a quote and five paragraphs carried six of them;
+        // measured on the same scroll script, one layer per reply cut hitches
+        // from 35 to 33 per run (hitch ratio 4.5% -> 4.3%).
+        .unlessDiagnostic("S1_PERF_NO_SELECTION") { $0.textSelection(.enabled) }
         .alert(saveMessage ?? "", isPresented: Binding(
             get: { saveMessage != nil },
             set: { if !$0 { saveMessage = nil } }
