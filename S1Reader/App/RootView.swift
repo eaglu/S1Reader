@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
@@ -77,11 +78,20 @@ struct RootView: View {
         }
         .modifier(SidebarAdaptableTabs())
         .environment(\.openURL, linkHandler)
+        // Links that come from outside the app: s1reader:// from Siri, Shortcuts
+        // or Safari, and the route an intent left behind in defaults.
+        .onOpenURL { url in
+            apply(AppDeepLink.parse(url))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PendingDeepLink.didArrive)) { _ in
+            consumePendingLink()
+        }
         .task {
             await model.loadIfNeeded()
             #if DEBUG
             openDebugTargetIfNeeded()
             #endif
+            consumePendingLink()
             // `S1_PERF_SCROLL` needs a screen to measure in a Release build too,
             // where the DEBUG-only `S1_OPEN` hook does not exist.
             if let tid = PerfProbe.threadID {
@@ -89,8 +99,48 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, model.isLoggedIn else { return }
+            guard phase == .active else { return }
+            // An intent performed while the app was in the background (or not
+            // running) leaves its route in defaults; this is where it lands.
+            consumePendingLink()
+            guard model.isLoggedIn else { return }
             Task { await model.refreshMember() }
+        }
+    }
+
+    private func consumePendingLink() {
+        apply(PendingDeepLink.take())
+    }
+
+    /// Sends a link to the screen it names. Replaces the board stack instead of
+    /// pushing, so asking Siri twice does not leave a second copy underneath.
+    private func apply(_ link: AppDeepLink?) {
+        guard let link else { return }
+        switch link {
+        case .forum(let fid):
+            tab = 0
+            path = [.linkedForum(fid: fid)]
+        case .thread(let tid, let pid):
+            tab = 0
+            path = [.linkedThread(tid: tid, pid: pid)]
+        case .notices:
+            tab = 1
+            guard model.isLoggedIn else {
+                // 提醒 needs a session: show the login sheet on 我的 rather than
+                // an empty list with a spinner that never resolves.
+                model.pendingLoginPrompt = true
+                return
+            }
+            accountPath = NavigationPath()
+            accountPath.append(AccountRoute.notices)
+        case .favorites:
+            tab = 1
+            guard model.isLoggedIn else {
+                model.pendingLoginPrompt = true
+                return
+            }
+            accountPath = NavigationPath()
+            accountPath.append(AccountRoute.favorites)
         }
     }
 

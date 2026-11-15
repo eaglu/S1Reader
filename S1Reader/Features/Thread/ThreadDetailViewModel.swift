@@ -45,6 +45,9 @@ final class ThreadDetailViewModel {
     var pollVoteError: String?
 
     private var threadFID = ""
+    /// Set once the thread has been handed to `RecentThreadStore`, so paging
+    /// does not rewrite it on every page.
+    private var didRecordRecentThread = false
     private var pollThreadIsClosed = false
     /// A page fetched as a guest cannot say whether this account voted.
     private var pollPageIsGuest = true
@@ -316,6 +319,7 @@ final class ThreadDetailViewModel {
             views = info.views
             if !info.fid.isEmpty { threadFID = info.fid }
             pollThreadIsClosed = info.isClosed
+            recordRecentThread(info)
         }
         if let fresh = result.poll {
             poll = fresh
@@ -329,6 +333,23 @@ final class ThreadDetailViewModel {
         }
         // Another page exists while the loaded page is not the last one.
         hasMore = page < pageCount && !posts.isEmpty
+    }
+
+    /// Hands the thread to the offline copies Siri reads: `RecentThreadStore`
+    /// for "open the thread I read yesterday", and the Spotlight index for
+    /// everything else.
+    private func recordRecentThread(_ info: ThreadInfo) {
+        guard !didRecordRecentThread else { return }
+        didRecordRecentThread = true
+        let thread = RecentThread(
+            tid: summary.tid,
+            subject: info.subject,
+            author: info.author,
+            fid: info.fid.isEmpty ? threadFID : info.fid,
+            date: Date()
+        )
+        RecentThreadStore.shared.record(thread)
+        S1SpotlightIndex.index(thread: thread)
     }
 
     private func markFresh(_ pids: [String]) {

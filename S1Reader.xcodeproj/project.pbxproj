@@ -30,10 +30,27 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		1A0000000000000000000002 /* S1Reader */ = {isa = PBXFileSystemSynchronizedRootGroup; path = S1Reader; sourceTree = "<group>"; };
+		1A0000000000000000000002 /* S1Reader */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A00000000000000000000A1 /* Exceptions for "S1Reader" folder in "S1Reader" target */,
+			);
+			path = S1Reader;
+			sourceTree = "<group>";
+		};
 		1A0000000000000000000011 /* S1ReaderTests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = S1ReaderTests; sourceTree = "<group>"; };
 		1A0000000000000000000021 /* S1ReaderUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = S1ReaderUITests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		1A00000000000000000000A1 /* Exceptions for "S1Reader" folder in "S1Reader" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 1A0000000000000000000006 /* S1Reader */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A0000000000000000000003 /* Frameworks */ = {
@@ -386,6 +403,7 @@
 				CURRENT_PROJECT_VERSION = 43;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = S1Reader/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "S1";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "保存帖子图片到你的相册";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -416,6 +434,7 @@
 				CURRENT_PROJECT_VERSION = 43;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = S1Reader/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "S1";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "保存帖子图片到你的相册";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

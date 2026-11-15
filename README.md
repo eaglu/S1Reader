@@ -79,6 +79,7 @@ S1Reader/
 │   ├── Networking/      APIClient（Discuz 移动端 API）、解码辅助、图片加载
 │   ├── Models/          Forum / Thread / Post / Account
 │   ├── HTML/            HTMLParser：帖子 HTML → 带样式的 AttributedString
+│   ├── Intents/          App Intents：版块/主题实体、三条 intent、深链、Spotlight 索引
 │   └── Store/           AppModel：全局状态（版块、登录态）
 └── Features/
     ├── Boards/          版块列表
@@ -87,6 +88,85 @@ S1Reader/
     └── Account/         登录、提醒、收藏夹
 S1ReaderTests/           单元测试（解析 / 解码 / 存储 / 缓存）
 ```
+
+## Siri AI（App Intents，Developer Preview）
+
+苹果 2026-11-03 起在 iOS/iPadOS/macOS/visionOS 27.3 beta 上开放 Siri AI Developer Preview：任何 app 都能用 App Intents 把自己的动作和内容接进 Siri AI，复杂任务用 app skills 编排。下面是从官方文档读出来的约束、这次实现的范围，以及在真机上的验证步骤。
+
+参考文档：
+
+- 公告 <https://developer.apple.com/news/?id=gdk2umrf>
+- <https://developer.apple.com/documentation/appintents/siri-ai-developer-preview>
+- Bringing custom actions and content to Siri / Orchestrating complex actions with app skills / Making app entities available in Spotlight / Verifying your App Intents implementation
+
+### 文档给出的约束
+
+- **没有新增 entitlement，也没有新增 Info.plist 声明。** Preview 的门槛只有三条：Apple Intelligence 可用机型、系统语言在支持列表里（英语 / 法语 / 日语 / 韩语 / 葡萄牙语 / 西班牙语；繁体中文、简体中文都还**不在**列表）、以及用开发签名或内部 TestFlight 分发。App Store 版本和外测 TestFlight **拿不到** Siri AI 能力，正式提审要等到明年春天。
+- **自定义动作要变成 Siri 的工具**：给 intent 加 `@AppIntent(.tool)`（新宏，等价于 `ToolIntent`）。已经采用 Siri 支持的内置 schema（消息、邮件这类主域）的 intent 不要再加，否则重复。
+- **实体要能被找到**：`IndexedEntity` + 命名 `CSSearchableIndex.indexAppEntities(_:)` 写进 Spotlight 语义索引——Siri AI 能 surface 索引里的任意实体，不再要求实体套系统 schema；`IndexedEntityQuery` 负责被要求重建索引时回填。属性用 `@Property` / `@ComputedProperty` 带 title 与 description；敏感字段用 `IntentAuthenticationPolicy`，不该给系统的用 `visibility: .internal`。模型可直接生成的实体走 `@AppEntity(.generable)` + `GenerableEntity`。
+- **复杂任务用 app skills**：`Skills.skillsbundle/Skills/<小写名字>/SKILL.md`，frontmatter 只有 `name` 与 `description`（Agent Skills 的子集），正文上限 10000 字；Xcode 在编译期校验并编译进 app，系统在支持 Preview 的设备上索引。skills 只能给建议，不能强制确定性行为。
+- **验证路径**：AppIntentsTesting 集成测试 → Shortcuts app 里试动作 → Spotlight 里试实体 → Siri 端到端；另有 Xcode 的 Siri Integration Advisor 和 SiriEvaluations 框架（两者都要 27.3 工具链）。Spotlight 索引在模拟器上不可靠，实体可发现性必须真机验证。
+
+### 本机工具链的缺口
+
+本机是 **Xcode 27.2 / iOS 27.2 SDK**，AppIntents 模块里**没有**：`@AppIntent(.tool)`、`ToolIntent`、`AppIntentTraits`、`GenerableEntity`、`@AppEntity(.generable)`、`IntentVisibility`、`CardSnippet`、`SiriEvaluations`，也不认识 `Skills.skillsbundle`（会把里面的 `SKILL.md` 拍平拷到 app 根目录）。
+
+已经有的：`IndexedEntity` / `indexAppEntities`（iOS 18）、`OpenIntent`（iOS 16）、`EntityStringQuery`、`EnumerableEntityQuery`、`AppShortcutsProvider`。所以这次按「标准 App Intents 部分做完整、Siri AI 专属部分用开关隔离」来做，Xcode 27.2 能正常编译、iOS 17 的老机型也还能装。
+
+### 这次实现的内容
+
+| Intent | 参数 | 做什么 | 深链 |
+| --- | --- | --- | --- |
+| `OpenForumIntent`（`OpenIntent`） | `ForumEntity` | 打开版块的主题列表 | `s1reader://forum?fid=6` |
+| `OpenThreadIntent` | `ThreadEntity?` / `keyword: String?` | 打开指定主题；只给关键词时按标题匹配第一条；都不给时打开最近读过的主题 | `s1reader://thread?tid=…` |
+| `CheckNoticesIntent` | `speakUnreadCount: Bool = true` | 打开「我的 → 提醒」，并用缓存的未读数回话 | `s1reader://notices` |
+
+- **实体**：`ForumEntity` / `ThreadEntity`，各配一个 `EntityStringQuery`；数据来自本地拷贝，`perform()` 与参数解析都不走网络。`ForumEntity` 用 `ForumDirectory`（`s1.forumDirectory`，含子版块展平），`ThreadEntity` 用 `RecentThreadStore`（`s1.recentThreads`，最近 60 个读过的主题）。
+- **Spotlight**：两者都有 `IndexedEntity` 一致性（`@available(iOS 18.0, *)`，不改 app 的 iOS 17 最低版本），`S1SpotlightIndex` 用命名索引 `S1ReaderEntities` 捐赠版块与主题。
+- **AppShortcutsProvider**：`S1Shortcuts` 给三条 intent 配了英文短语（Siri AI 目前不支持中文），参数值可以是中文（版块名、主题标题）。
+- **深链**：`AppDeepLink` 解析/生成 `s1reader://`，`Info.plist` 注册 scheme；intent 不在 `perform()` 里阻塞，而是把路由写进 `PendingDeepLink`（defaults + 通知）再由界面消费。`RootView` 三条路都收：`.onOpenURL`（外部打开）、通知（app 已在前台）、`scenePhase` 变 active（app 被 intent 唤醒）。
+- **未登录降级**：深链指向「提醒」/「收藏夹」而当前没有会话时，切到「我的」并弹登录 sheet（`AppModel.pendingLoginPrompt` → `AccountView`），不会是空白页或崩溃。
+- **缓存刷新**：`AppModel` 每次成功拉 `forumindex`/会话后写版块表、未读徽标、并重建 Spotlight 索引；`ThreadDetailViewModel` 在主题头部到达后记一次最近主题。
+- **skill**：`Skills.skillsbundle/Skills/stage1st-reader/SKILL.md`，描述「打开版块 / 打开主题 / 看提醒」三条动作的用法与禁忌（英文，与短语语言一致）。
+
+### 没做 / 受 Phase 限制的部分
+
+- `@AppIntent(.tool)` 与技能包**没有在 27.2 上编译**：三个 `perform()` 前的宏放在 `#if SIRI_AI_PREVIEW` 里，默认关闭。升级 Xcode 后打开即可，代码路径不用重写。
+- `Skills.skillsbundle` 故意放在仓库根、**不在** app target 里：27.2 不认识这个 bundle 类型，会把它拍平（`SKILL.md` 掉到 bundle 根目录）。
+- `CardSnippet` 卡片、「模型直接生成实体」、`SiriEvaluations` 评估、Xcode 的 Siri Integration Advisor 都要 27.3 工具链，未做。
+- 真机 Siri AI 无法在这台 Mac 上验证（Apple Intelligence 资格校验过不去，模拟器也没有 Siri AI），只能靠「Debug 包 + 真机」实测，步骤见下。
+- 区域与年龄限制是系统定的：EU 的 iOS/iPadOS/watchOS 暂不可用，13 岁以下不可用；服务端模型类功能还有每日用量上限。
+
+### 真机实测步骤（iPhone，iOS 27.3 beta）
+
+1. **语言与 Apple Intelligence**：设置 → Apple Intelligence 与 Siri → 语言改成 English (US)（Siri AI 目前不支持中文）；同一页打开 Apple Intelligence，等模型下载完成。
+2. **装 Debug 包**：Xcode 里选真机直接 Run，或 `xcodebuild -project S1Reader.xcodeproj -scheme S1Reader -configuration Debug -destination 'id=<真机 UDID>' install`。首次启动后**先在 app 里逛一圈**（进两三个版块、点开一个主题）——版块表、最近主题和 Spotlight 索引都是这时候写进去的。
+3. **确认动作已注册**：打开 Shortcuts → 新建快捷指令 → 搜索栏旁边的 Apps → S1，应能看到 `Open Board` / `Open Thread` / `Check Notices` 三个动作；Spotlight 搜版块名应出现 S1 的结果，点进去落到对应版块。
+4. **说这三句**（app 在前台、后台都可以；后台时需要提到 app 名，短语里已经带了）：
+   - “Hey Siri, **open a board in S1**” → 追问时用中文说版块名（例如「游戏论坛」），应进入该版块主题列表。
+   - “Hey Siri, **open my last thread in S1**” → 打开最近读过的主题。
+   - “Hey Siri, **how many notices do I have in S1**” → 进「我的 → 提醒」，并念出未读数（登录过、且 app 同步过徽标才有数字）。
+5. **未登录降级**：退出登录后说第三句，应弹登录 sheet，而不是空页。
+6. **外部深链**：Safari 打开 `s1reader://forum?fid=6`，应落到该版块（模拟器上已验证）。
+
+注意 Preview 阶段的表述可能变：Siri AI 允许「不点 app 名」，但同一个请求在不同措辞下可能走不同 intent；如果某句话没命中，先在 Shortcuts 里跑同一个动作，确认 intent 本身没问题，再改措辞。
+
+### 升级到 Xcode 27.3 之后的待办
+
+1. 确认 `xcodebuild -version` 是 27.3；把 `SIRI_AI_PREVIEW` 加进 target 的 `SWIFT_ACTIVE_COMPILATION_CONDITIONS`（Debug/Release 都要），或直接删掉三个 intent 上的 `#if`。
+2. 把 `Skills.skillsbundle` 加进 S1Reader target 的 Copy Bundle Resources，确认包内结构是 `Skills/stage1st-reader/SKILL.md`；Xcode 会校验 frontmatter，名字与目录必须一致。
+3. 给 `ForumEntity` / `ThreadEntity` 的字段补 `@Property(title:description:)` 的 description，敏感字段按需加 `authenticationPolicy`，内部字段用 `visibility: .internal`。
+4. 用 SiriEvaluations 写端到端评估（打开版块、最近主题、未读提醒各一条），接进 CI。
+5. 用 CardSnippet 给「打开主题」「提醒」做卡片，替掉系统默认展示。
+6. 视需要给「按标题找主题」加 `GenerableEntity`，让模型直接生成实体、省掉一次查询。
+7. 提审前记得：Developer Preview 的能力在 App Store 版本里**不生效**，不要把依赖 `@AppIntent(.tool)` 的体验当成已上线功能写进发布说明。
+
+### 验证记录
+
+- `scripts/test.sh`：247 tests, 0 failures（新增 `AppDeepLinkTests` 9 条、`SiriIntentTests` 17 条，覆盖深链解析/往返、实体按 id 与关键词解析、最近主题排序与上限、未读数回话的四种分支）。
+- `xcodebuild ... build`：BUILD SUCCEEDED（Xcode 27.2 / iOS 27.2 SDK，deployment target 17.0）。`appintentsmetadataprocessor` 正常写出 `Metadata.appintents`，三个动作会出现在 Shortcuts 里。
+- 模拟器（iPhone 17, iOS 27.2）：`s1reader://forum?fid=6` 落到版块主题列表；未登录时 `s1reader://notices` 弹登录 sheet。
+- 真机 Siri AI：待按上面的步骤在 iPhone (iOS 27.3) 上实测。
 
 ## 数据来源
 

@@ -11,6 +11,9 @@ final class AppModel {
     var loadError: String?
     var isLoggingIn = false
     var loginError: String?
+    /// Set when something outside the app asked for a signed-in screen (Siri
+    /// asking for 提醒 while signed out). 我的 shows the login sheet and clears it.
+    var pendingLoginPrompt = false
 
     private var didLoad = false
 
@@ -79,6 +82,7 @@ final class AppModel {
             member = index.member
             forums = index.forums.isEmpty ? forums : index.forums
             categories = index.categories.isEmpty ? categories : index.categories
+            cacheForSiri()
         } catch {
             // Keep the previous state; the badge is not worth an error banner.
         }
@@ -105,8 +109,18 @@ final class AppModel {
             categories = index.categories
             member = index.member
             didLoad = true
+            cacheForSiri()
         } catch {
             loadError = error.localizedDescription
         }
+    }
+
+    /// Keeps the offline copies App Intents read: the board index (so a board
+    /// name can be resolved without a request), the notice badge (so Siri can
+    /// answer "how many notices" instantly) and the Spotlight entity index.
+    private func cacheForSiri() {
+        ForumDirectory.shared.save(forums)
+        NoticeBadgeStore.shared.record(unread: member?.unreadNotices ?? 0, loggedIn: isLoggedIn)
+        S1SpotlightIndex.index(forums: forums)
     }
 }

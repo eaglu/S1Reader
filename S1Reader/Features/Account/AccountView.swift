@@ -182,7 +182,18 @@ struct AccountView: View {
                 showLogin = true
             }
             #endif
+            showLoginIfRequested()
         }
+        .onChange(of: model.pendingLoginPrompt) { _, _ in
+            showLoginIfRequested()
+        }
+    }
+
+    /// A deep link — or Siri — asked for a screen that needs a session.
+    private func showLoginIfRequested() {
+        guard model.pendingLoginPrompt else { return }
+        model.pendingLoginPrompt = false
+        showLogin = true
     }
 
     private var cacheDescription: String {
