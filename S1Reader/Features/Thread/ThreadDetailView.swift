@@ -279,6 +279,9 @@ extension ThreadDetailView {
     /// view stays inside what the type checker will accept in one expression.
     private var scrollArea: some View {
         PerfProbe.note { $0.listBodies += 1 }
+        // One pass over the posts per body instead of one per row that appears:
+        // the "next page" anchor used to re-filter every floor as it scrolled in.
+        let visible = visiblePosts
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ThreadHeaderView(
@@ -318,8 +321,8 @@ extension ThreadDetailView {
                     }
                 }
 
-                ForEach(visiblePosts) { post in
-                    postRow(post)
+                ForEach(visible) { post in
+                    postRow(post, isLast: post.pid == visible.last?.pid)
                     // The poll belongs to the thread, not to a floor, but it is
                     // read directly under the first post: only when that post is
                     // actually on screen (a jump straight to page 400 has no
@@ -406,7 +409,7 @@ extension ThreadDetailView {
         !model.posts.isEmpty && model.loadedPages >= model.pageCount
     }
 
-    private func postRow(_ post: Post) -> some View {
+    private func postRow(_ post: Post, isLast: Bool) -> some View {
         PerfProbe.note { $0.rowsBuilt += 1 }
         return PostRowView(
             post: post,
@@ -428,7 +431,7 @@ extension ThreadDetailView {
         .onAppear {
             // Appending does not move the top, so one anchor per page is enough;
             // a request already in flight is dropped rather than queued.
-            guard post.pid == visiblePosts.last?.pid else { return }
+            guard isLast else { return }
             guard !model.isLoadingMore else { return }
             guard lastNextPageAnchor != topAnchorKey else { return }
             lastNextPageAnchor = topAnchorKey
