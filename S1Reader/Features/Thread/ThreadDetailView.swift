@@ -102,6 +102,7 @@ struct ThreadDetailView: View {
                 model.focusPid = nil
             }
             .onChange(of: visiblePid) { _, pid in
+                PerfProbe.note { $0.visiblePidWrites += 1 }
                 saveReadingPosition(pid)
             }
             .onDisappear {
@@ -112,6 +113,11 @@ struct ThreadDetailView: View {
         .task(id: model.posts.count) {
             await PostBodyCache.shared.warm(posts: model.posts, scale: HTMLParser.textScale(for: mainDynamicTypeSize))
             registerThreadImages()
+        }
+        // Measures the list once a page is in it when `S1_PERF_SCROLL` is set;
+        // inert otherwise.
+        .task(id: model.posts.count) {
+            await PerfProbe.runScrollScriptIfEnabled()
         }
         // A vote cast on this device is remembered per account; re-read it when
         // the reader logs in or out while the thread is open.
@@ -272,7 +278,8 @@ extension ThreadDetailView {
     /// The scrolling list plus everything pinned to it. Kept out of `body` so the
     /// view stays inside what the type checker will accept in one expression.
     private var scrollArea: some View {
-        ScrollView {
+        PerfProbe.note { $0.listBodies += 1 }
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ThreadHeaderView(
                     title: model.title,
@@ -321,7 +328,9 @@ extension ThreadDetailView {
                     if post.isFirst {
                         pollSection
                     }
-                    Divider()
+                    if !PerfProbe.diagnostic("S1_PERF_NO_DIVIDER") {
+                        Divider()
+                    }
                 }
 
                 ThreadListFooter(
@@ -358,6 +367,7 @@ extension ThreadDetailView {
         .accessibilityValue(debugWindowProbe)
         .modifier(ScrollMotionObserver(
             onOffset: { offset in
+                PerfProbe.note { $0.scrollOffsetWrites += 1 }
                 scrollOffset = offset
                 pinWhenSettled()
             },
@@ -397,7 +407,8 @@ extension ThreadDetailView {
     }
 
     private func postRow(_ post: Post) -> some View {
-        PostRowView(
+        PerfProbe.note { $0.rowsBuilt += 1 }
+        return PostRowView(
             post: post,
             onImageTap: openImage,
             onQuoteTap: { pid in Task { await jump(to: pid, from: post.pid) } },
@@ -411,9 +422,9 @@ extension ThreadDetailView {
             zoomNamespace: imageZoom
         )
         .id(post.pid)
-        .rowEntrance(isNew: model.isFresh(post.pid))
+        .rowEntrance(isNew: model.isFresh(post.pid) && !PerfProbe.diagnostic("S1_PERF_NO_MOTION"))
         .background(post.pid == highlightedPid ? Color.accentColor.opacity(0.12) : Color.clear)
-        .animation(.easeOut(duration: 0.35), value: highlightedPid)
+        .animation(PerfProbe.diagnostic("S1_PERF_NO_MOTION") ? nil : .easeOut(duration: 0.35), value: highlightedPid)
         .onAppear {
             // Appending does not move the top, so one anchor per page is enough;
             // a request already in flight is dropped rather than queued.
@@ -627,7 +638,11 @@ extension ThreadDetailView {
     }
 
     private var visiblePosts: [Post] {
-        model.posts.filter { post in
+        PerfProbe.note {
+            $0.filterRuns += 1
+            $0.filterPosts += model.posts.count
+        }
+        return model.posts.filter { post in
             // A thread the reader opened on purpose keeps its head even when its
             // author is blocked; only the replies lose that voice.
             if post.isFirst { return true }

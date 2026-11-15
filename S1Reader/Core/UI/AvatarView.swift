@@ -15,6 +15,11 @@ struct AvatarView: View {
     }
 
     var body: some View {
+        PerfProbe.note { $0.avatarBodies += 1 }
+        return PerfProbe.measured(.avatar) { avatarContent }
+    }
+
+    private var avatarContent: some View {
         ZStack {
             Circle()
                 .fill(Color.accentColor.opacity(0.15))

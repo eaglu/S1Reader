@@ -182,7 +182,7 @@ struct RemoteImage: View {
 
     var body: some View {
         Group {
-            if let image {
+            if let image, !PerfProbe.diagnostic("S1_PERF_NO_IMAGES") {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
@@ -198,8 +198,8 @@ struct RemoteImage: View {
         .frame(maxWidth: .infinity, maxHeight: maxHeight)
         // Pictures arrive at different moments; a short fade keeps them from
         // popping in mid-scroll.
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: image == nil)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: didFail)
+        .animation(fadeAnimation, value: image == nil)
+        .animation(fadeAnimation, value: didFail)
         .visibleInScroll { visible in
             isOnScreen = visible
             if visible { load() }
@@ -218,13 +218,27 @@ struct RemoteImage: View {
         }
     }
 
+    private var fadeAnimation: Animation? {
+        if PerfProbe.diagnostic("S1_PERF_NO_IMAGE_FADE") { return nil }
+        return reduceMotion ? nil : .easeOut(duration: 0.18)
+    }
+
     /// Same footprint the picture will occupy: known ratio if we have it, a
     /// plain grey card at a sensible ratio until the peek answers.
     private var placeholder: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(Color(uiColor: .tertiarySystemFill))
             .aspectRatio(reservedAspect, contentMode: .fit)
-            .overlay(ProgressView())
+            .overlay {
+                // A spinner is only worth its animation while the picture is
+                // actually on its way; a placeholder for a row that is merely
+                // built ahead of the viewport stays still.
+                if PerfProbe.diagnostic("S1_PERF_STATIC_PLACEHOLDER") {
+                    EmptyView()
+                } else {
+                    ProgressView()
+                }
+            }
     }
 
     /// Read straight from the store so the very first layout already has the

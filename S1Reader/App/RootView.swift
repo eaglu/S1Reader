@@ -82,6 +82,11 @@ struct RootView: View {
             #if DEBUG
             openDebugTargetIfNeeded()
             #endif
+            // `S1_PERF_SCROLL` needs a screen to measure in a Release build too,
+            // where the DEBUG-only `S1_OPEN` hook does not exist.
+            if let tid = PerfProbe.threadID {
+                path.append(.linkedThread(tid: tid, pid: nil))
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, model.isLoggedIn else { return }

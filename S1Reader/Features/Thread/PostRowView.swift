@@ -26,13 +26,23 @@ struct PostRowView: View {
     /// tall and then grows shoves the reply being read down the screen.
     private var shownNodes: [PostNode] {
         if didParse { return nodes }
-        return PostNodeMirror.shared.nodes(
+        let cached = PostNodeMirror.shared.nodes(
             pid: post.pid,
             scale: HTMLParser.textScale(for: dynamicTypeSize)
-        ) ?? []
+        )
+        PerfProbe.note { cached == nil ? ($0.mirrorMisses += 1) : ($0.mirrorHits += 1) }
+        return cached ?? []
     }
 
     var body: some View {
+        PerfProbe.note {
+            $0.rowBodies += 1
+            $0.rowBodiesByPid[post.pid, default: 0] += 1
+        }
+        return PerfProbe.measured(.rowBody) { rowContent }
+    }
+
+    private var rowContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             if shownNodes.isEmpty && !post.message.isEmpty {
@@ -49,7 +59,7 @@ struct PostRowView: View {
                     // The UI test looks for this to prove a floor rendered text and
                     // not the grey placeholder bar.
                     .accessibilityIdentifier("postBody-\(post.pid)")
-                    .contextMenu { menu }
+                    .unlessDiagnostic("S1_PERF_NO_MENU") { $0.contextMenu { menu } }
             }
         }
         .padding(.horizontal, 16)
@@ -114,6 +124,11 @@ struct PostRowView: View {
     }
 
     private var header: some View {
+        PerfProbe.note { $0.rowHeaders += 1 }
+        return PerfProbe.measured(.header) { headerContent }
+    }
+
+    private var headerContent: some View {
         let who = HStack(spacing: 8) {
             if let onAuthorTap {
                 Button { onAuthorTap(post) } label: {
@@ -196,11 +211,19 @@ struct PostContentView: View {
     }
 
     private var blocks: [Block] {
+        PerfProbe.note { $0.blockBuilds += 1 }
+        return PerfProbe.measured(.blocks) { builtBlocks }
+    }
+
+    private var builtBlocks: [Block] {
         var result: [Block] = []
         var pieces: [Text] = []
 
         func flush() {
             guard !pieces.isEmpty else { return }
+            PerfProbe.note {
+                $0.textConcatenations += pieces.count
+            }
             result.append(.text(pieces.reduce(Text(""), +)))
             pieces.removeAll()
         }
@@ -231,12 +254,17 @@ struct PostContentView: View {
     }
 
     var body: some View {
+        PerfProbe.note { $0.contentBodies += 1 }
+        return PerfProbe.measured(.contentBody) { contentBody }
+    }
+
+    private var contentBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .text(let text):
                     text
-                        .textSelection(.enabled)
+                        .unlessDiagnostic("S1_PERF_NO_SELECTION") { $0.textSelection(.enabled) }
                         .fixedSize(horizontal: false, vertical: true)
                 case .quote(let quote):
                     QuoteCard(quote: quote, onQuoteTap: onQuoteTap)
@@ -251,14 +279,16 @@ struct PostContentView: View {
                     .zoomSource(id: url.absoluteString, in: zoomNamespace)
                     .accessibilityLabel("帖子图片")
                     .accessibilityHint("双击查看大图")
-                    .contextMenu {
-                        Button {
-                            save(url)
-                        } label: {
-                            Label("保存到相册", systemImage: "square.and.arrow.down")
-                        }
-                        ShareLink(item: url) {
-                            Label("分享图片", systemImage: "square.and.arrow.up")
+                    .unlessDiagnostic("S1_PERF_NO_MENU") { view in
+                        view.contextMenu {
+                            Button {
+                                save(url)
+                            } label: {
+                                Label("保存到相册", systemImage: "square.and.arrow.down")
+                            }
+                            ShareLink(item: url) {
+                                Label("分享图片", systemImage: "square.and.arrow.up")
+                            }
                         }
                     }
                 }

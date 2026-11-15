@@ -40,6 +40,7 @@ actor PostBodyCache {
     /// Every result is also published to the main-actor mirror, so the *next*
     /// row built for this post can draw it synchronously.
     func nodes(pid: String, html: String, scale: CGFloat) async -> [PostNode] {
+        SharedPerfCounters.shared.bump(.cacheLookups)
         let nodes = await parseIfNeeded(pid: pid, html: html, scale: scale)
         await MainActor.run {
             PostNodeMirror.shared.store(nodes, pid: pid, scale: scale)
@@ -59,6 +60,7 @@ actor PostBodyCache {
         let task = Task.detached(priority: .userInitiated) {
             PostBodyCache.parseMeasured(html: html, scale: scale)
         }
+        SharedPerfCounters.shared.bump(.cacheParses)
         inflight[key] = task
         let nodes = await task.value
         inflight[key] = nil
