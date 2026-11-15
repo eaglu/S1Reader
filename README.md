@@ -199,3 +199,46 @@ SIMCTL_CHILD_S1_DEMO=1 SIMCTL_CHILD_S1_TAB=account \
 ## 免责声明
 
 非官方客户端，与 Stage1st 官方无关。请遵守论坛规则，不要用于爬取或批量抓取内容。
+
+### 滚动帧数据（Release）
+
+`scripts/perf-scroll.sh` 用 Release 包在模拟器上跑一段固定脚本：以 700pt/s 滚动 2400pt 再滚回来，两趟；记录每帧间隔、hitch（>1.5 帧）、hitch 占比、丢帧数、每帧主线程构建耗时，以及这段时间里列表重建了多少次（行 body、正文块、头像、过滤器、缓存命中/解析）。默认连跑三次取中位数，先跑一次热身丢弃。
+
+```
+scripts/perf-scroll.sh                              # 帖子 2206666
+S1_PERF_THREAD=2268175 S1_PERF_RUNS=3 ./scripts/perf-scroll.sh
+S1_PERF_NO_SELECTION=1 ./scripts/perf-scroll.sh     # 关掉一项做 A/B
+```
+
+探针在 `S1Reader/Core/Debug/PerfProbe.swift`，不带 `S1_PERF_SCROLL` 时每个计数器都只是一次 `Bool` 判断，App 行为不变；`S1_PERF_NO_*` 同理，只在测量时有意义。
+
+**改前（中位数 3 次，Release，iPhone 18 Pro 模拟器 60Hz）**
+
+| 帖子 | 帧均值 | p99 | hitch（>1.5 帧） | hitch 占比 | 平滑帧 | 行 body | 过滤次数 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2268175（40 楼 / 23 张图） | 17.5ms | 38.2ms | 35 | 4.5% | 95.5% | 75 | 63（2440 次比较） |
+| 2206666（39 楼 / 纯文字） | 17.2ms | 33.3ms | 22 | 3.0% | 97.2% | 71 | 71（2760 次比较） |
+
+**改后**
+
+| 帖子 | 帧均值 | p99 | hitch | hitch 占比 | 平滑帧 | 行 body | 过滤次数 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2268175 | 17.4ms | 38.2ms | 33 | 4.3% | 95.8% | 75 | 4（80 次比较） |
+| 2206666 | 17.1ms | 33.3ms | 18 | 2.5% | 97.8% | 71 | 4（80 次比较） |
+
+**同一脚本下的逐项 A/B（2268175，中位数 3 次）**，用来区分「哪一项真的贵」：
+
+| 关掉的东西 | hitch | hitch 占比 | p99 |
+| --- | --- | --- | --- |
+| 无（基线） | 35 | 4.5% | 38.2ms |
+| 每段文字独立 `.textSelection` | 30 | 3.6% | 33.5ms |
+| 行的 `.contextMenu` | 31 | 4.2% | 37.6ms |
+| 图片淡入动画 | 32 | 4.4% | 38.6ms |
+| 每行 `Divider()` | 34 | 4.2% | 37.7ms |
+| 图片本身（只留占位块） | 38 | 4.8% | 38.5ms |
+| 占位块里的 `ProgressView` | 37 | 4.9% | 38.2ms |
+| 行的入场动画与高亮动画 | 38 | 4.8% | 38.2ms |
+
+结论：这类内容上，SwiftUI 的 body 构建不是瓶颈（行 body 合计 24–55ms／14s，每帧 0.1ms 量级），每帧真正的时间花在系统侧的文字排版与 CGRect 合成上——Time Profiler 里主线程的热点是 `objc_msgSend`、Swift 元数据/协议查表、malloc/free、`memmove` 和 CoreAnimation 的 layer commit，没有哪个 App 函数独占。因此能改的就是减少每行挂上去的交互层：`.textSelection` 从「每个文字段一层」变成「整楼一层」。图片解码本来就在后台线程做降采样，A/B 也证明它不是这段脚本的瓶颈。
+
+另外两条被数据否掉了：写 `scrollOffset`（每帧一次，14s 内 820 次）并不会让列表 body 重算（`listBodies=4`），因为这个状态没有被 body 读取；滚动中也没有重复解析（`cacheParses=40` 全部来自每页到达后的预热，`mirrorHits` 命中正常）。
