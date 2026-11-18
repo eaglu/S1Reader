@@ -3,6 +3,7 @@ import SwiftUI
 struct ThreadDetailView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var mainDynamicTypeSize
     @Environment(BlockedAuthorsStore.self) private var blocks
@@ -87,10 +88,18 @@ struct ThreadDetailView: View {
     private let initialFocusPid: String?
     /// Opens the thread at its newest page instead of the first one.
     private let startAtLastPage: Bool
+    /// Opens the thread at a specific page, from the reading Live Activity.
+    private let startAtPage: Int?
 
-    init(summary: ThreadSummary, focusPid: String? = nil, startAtLastPage: Bool = false) {
+    init(
+        summary: ThreadSummary,
+        focusPid: String? = nil,
+        startAtLastPage: Bool = false,
+        startAtPage: Int? = nil
+    ) {
         self.initialFocusPid = focusPid
         self.startAtLastPage = startAtLastPage
+        self.startAtPage = startAtPage
         _model = State(initialValue: ThreadDetailViewModel(summary: summary))
     }
 
@@ -107,6 +116,21 @@ struct ThreadDetailView: View {
             }
             .onDisappear {
                 saveReadingPosition(visiblePid, immediate: true)
+                // Whatever the reader was in has been left: the card must not
+                // stay behind pointing at a screen that is gone.
+                ReadingLiveActivity.end()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                switch phase {
+                case .active:
+                    // Back in the app, so the island has done its job. Ending it
+                    // here is what keeps it off the Lock Screen once read.
+                    ReadingLiveActivity.end()
+                case .inactive, .background:
+                    publishReadingActivity()
+                default:
+                    break
+                }
             }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -126,7 +150,14 @@ struct ThreadDetailView: View {
         }
         .task {
             await model.loadIfNeeded()
-            if startAtLastPage {
+            if let startAtPage {
+                // Reopened from the Live Activity: land on the page that was on
+                // the card, not on the saved reading position.
+                isRestoringPosition = true
+                await model.loadPage(startAtPage)
+                didRestorePosition = true
+                isRestoringPosition = false
+            } else if startAtLastPage {
                 // Page one has to load first either way: only the server's answer
                 // says how many pages there are.
                 isRestoringPosition = true
@@ -407,6 +438,29 @@ extension ThreadDetailView {
 
     private var canCheckNewReplies: Bool {
         !model.posts.isEmpty && model.loadedPages >= model.pageCount
+    }
+
+    /// Mirrors the thread into the Dynamic Island / Lock Screen for the moment
+    /// the reader leaves it. A card is only worth showing once the header is
+    /// known: an empty title would read as a glitch.
+    private func publishReadingActivity() {
+        guard model.hasLoadedOnce, !model.posts.isEmpty else { return }
+        let state = ReadingActivityAttributes.ContentState(
+            title: model.title,
+            page: model.loadedPages,
+            pageCount: model.pageCount,
+            author: model.summary.author,
+            excerpt: readingExcerpt
+        )
+        let tid = model.summary.tid
+        Task { await ReadingLiveActivity.present(tid: tid, state: state) }
+    }
+
+    /// The opening post as plain text, for the one line under the title.
+    private var readingExcerpt: String {
+        let opening = model.posts.first(where: { $0.isFirst }) ?? model.posts.first
+        guard let message = opening?.message, !message.isEmpty else { return "" }
+        return HTMLParser.plainText(message)
     }
 
     private func postRow(_ post: Post, isLast: Bool) -> some View {

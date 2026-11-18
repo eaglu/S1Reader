@@ -18,5 +18,9 @@
 			</array>
 		</dict>
 	</array>
+	<!-- The reading Live Activity is rendered by the S1ReaderWidgets extension;
+	     the app is the side that asks ActivityKit to start one. -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 </dict>
 </plist>

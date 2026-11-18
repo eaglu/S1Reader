@@ -9,6 +9,9 @@ import Foundation
 enum AppDeepLink: Hashable, Sendable {
     case forum(fid: String)
     case thread(tid: String, pid: String?)
+    /// A reading position handed back by the reading Live Activity: land on the
+    /// thread at the page the reader left it on.
+    case reading(tid: String, page: Int)
     case notices
     case favorites
 
@@ -23,6 +26,8 @@ enum AppDeepLink: Hashable, Sendable {
             var query = ["tid": tid]
             if let pid, !pid.isEmpty { query["pid"] = pid }
             return Self.make(host: "thread", query: query)
+        case .reading(let tid, let page):
+            return Self.make(host: "thread", query: ["tid": tid, "page": String(max(1, page))])
         case .notices:
             return Self.make(host: "notices", query: [:])
         case .favorites:
@@ -59,6 +64,11 @@ enum AppDeepLink: Hashable, Sendable {
             return .forum(fid: fid)
         case "thread":
             guard let tid = value("tid", at: 0) else { return nil }
+            // `page` is what the Live Activity hands back; a plain link has a
+            // floor (`pid`) instead, and the two are never combined.
+            if let raw = query["page"], let page = Int(raw), page > 0 {
+                return .reading(tid: tid, page: page)
+            }
             return .thread(tid: tid, pid: value("pid", at: 1))
         case "notices", "notice", "alerts":
             return .notices

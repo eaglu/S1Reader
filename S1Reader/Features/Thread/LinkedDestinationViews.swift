@@ -7,6 +7,10 @@ import SwiftUI
 struct LinkedThreadView: View {
     let tid: String
     let pid: String?
+    /// Page to land on when the thread is reopened from the Live Activity. A
+    /// saved reading position is ignored in that case: the reader tapped "continue
+    /// at page 398", not "wherever I last scrolled to".
+    var page: Int?
 
     @State private var summary: ThreadSummary?
     @State private var errorMessage: String?
@@ -14,7 +18,7 @@ struct LinkedThreadView: View {
     var body: some View {
         Group {
             if let summary {
-                ThreadDetailView(summary: summary, focusPid: pid)
+                ThreadDetailView(summary: summary, focusPid: pid, startAtPage: page)
             } else if let errorMessage {
                 ContentUnavailableView {
                     Label("打不开这个帖子", systemImage: "exclamationmark.bubble")

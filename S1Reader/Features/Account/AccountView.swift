@@ -16,6 +16,9 @@ struct AccountView: View {
     @State private var guestFallbackCount = 0
     @State private var showLogoutConfirm = false
     @State private var toast: ToastMessage?
+    /// The 灵动岛 switch. Stored under the key the Live Activity controller reads,
+    /// and on by default so the feature works without a visit to 我的.
+    @AppStorage(ReadingLiveActivity.enabledKey) private var showsReadingActivity = true
 
     var body: some View {
         List {
@@ -127,6 +130,16 @@ struct AccountView: View {
             }
 
             Section {
+                Toggle(isOn: $showsReadingActivity) {
+                    Label("灵动岛显示正在阅读", systemImage: "text.book.closed")
+                }
+            } header: {
+                Text("阅读")
+            } footer: {
+                Text("切出应用时，在灵动岛和锁屏显示当前帖子的标题与页码，点一下回到那一页。关掉后不会再出现。")
+            }
+
+            Section {
                 HStack {
                     Text("版本")
                     Spacer()
@@ -145,6 +158,12 @@ struct AccountView: View {
         }
         .navigationTitle("我的")
         .toast($toast)
+        .onChange(of: showsReadingActivity) { _, isOn in
+            // The card must not outlive the switch: turning it off while the app
+            // is open takes away the one the reader can still see in the island.
+            guard !isOn else { return }
+            ReadingLiveActivity.end()
+        }
         .refreshable {
             await model.refreshMember()
             await refreshCacheUsage()

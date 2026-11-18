@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		1A000000000000000000003D /* S1ReaderWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000030 /* S1ReaderWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		1A000000000000000000001A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,12 +25,20 @@
 			remoteGlobalIDString = 1A0000000000000000000006;
 			remoteInfo = S1Reader;
 		};
+		1A000000000000000000003B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A000000000000000000000A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000034;
+			remoteInfo = S1ReaderWidgets;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		1A0000000000000000000001 /* S1Reader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = S1Reader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000010 /* S1ReaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = S1ReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000020 /* S1ReaderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = S1ReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000030 /* S1ReaderWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = S1ReaderWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,6 +52,15 @@
 		};
 		1A0000000000000000000011 /* S1ReaderTests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = S1ReaderTests; sourceTree = "<group>"; };
 		1A0000000000000000000021 /* S1ReaderUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = S1ReaderUITests; sourceTree = "<group>"; };
+		1A0000000000000000000031 /* S1ReaderWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A0000000000000000000033 /* Exceptions for "S1ReaderWidgets" folder in "S1ReaderWidgets" target */,
+			);
+			path = S1ReaderWidgets;
+			sourceTree = "<group>";
+		};
+		1A0000000000000000000032 /* Shared */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Shared; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -50,7 +71,28 @@
 			);
 			target = 1A0000000000000000000006 /* S1Reader */;
 		};
+		1A0000000000000000000033 /* Exceptions for "S1ReaderWidgets" folder in "S1ReaderWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 1A0000000000000000000034 /* S1ReaderWidgets */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		1A000000000000000000003E /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				1A000000000000000000003D /* S1ReaderWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A0000000000000000000003 /* Frameworks */ = {
@@ -74,6 +116,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A0000000000000000000037 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -83,6 +132,8 @@
 				1A0000000000000000000002 /* S1Reader */,
 				1A0000000000000000000011 /* S1ReaderTests */,
 				1A0000000000000000000021 /* S1ReaderUITests */,
+				1A0000000000000000000031 /* S1ReaderWidgets */,
+				1A0000000000000000000032 /* Shared */,
 				1A0000000000000000000005 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -93,6 +144,7 @@
 				1A0000000000000000000001 /* S1Reader.app */,
 				1A0000000000000000000010 /* S1ReaderTests.xctest */,
 				1A0000000000000000000020 /* S1ReaderUITests.xctest */,
+				1A0000000000000000000030 /* S1ReaderWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -107,13 +159,16 @@
 				1A0000000000000000000008 /* Sources */,
 				1A0000000000000000000003 /* Frameworks */,
 				1A0000000000000000000009 /* Resources */,
+				1A000000000000000000003E /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				1A000000000000000000003C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				1A0000000000000000000002 /* S1Reader */,
+				1A0000000000000000000032 /* Shared */,
 			);
 			name = S1Reader;
 			packageProductDependencies = (
@@ -168,6 +223,29 @@
 			productReference = 1A0000000000000000000020 /* S1ReaderUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		1A0000000000000000000034 /* S1ReaderWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A0000000000000000000035 /* Build configuration list for PBXNativeTarget "S1ReaderWidgets" */;
+			buildPhases = (
+				1A0000000000000000000036 /* Sources */,
+				1A0000000000000000000037 /* Frameworks */,
+				1A0000000000000000000038 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1A0000000000000000000031 /* S1ReaderWidgets */,
+				1A0000000000000000000032 /* Shared */,
+			);
+			name = S1ReaderWidgets;
+			packageProductDependencies = (
+			);
+			productName = S1ReaderWidgets;
+			productReference = 1A0000000000000000000030 /* S1ReaderWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -189,6 +267,9 @@
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 1A0000000000000000000006;
 					};
+					1A0000000000000000000034 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 				};
 			};
 			buildConfigurationList = 1A000000000000000000000B /* Build configuration list for PBXProject "S1Reader" */;
@@ -209,6 +290,7 @@
 				1A0000000000000000000006 /* S1Reader */,
 				1A0000000000000000000015 /* S1ReaderTests */,
 				1A0000000000000000000025 /* S1ReaderUITests */,
+				1A0000000000000000000034 /* S1ReaderWidgets */,
 			);
 		};
 /* End PBXProject section */
@@ -229,6 +311,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		1A0000000000000000000024 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000038 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -259,6 +348,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A0000000000000000000036 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -271,6 +367,11 @@
 			isa = PBXTargetDependency;
 			target = 1A0000000000000000000006 /* S1Reader */;
 			targetProxy = 1A000000000000000000002A /* PBXContainerItemProxy */;
+		};
+		1A000000000000000000003C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A0000000000000000000034 /* S1ReaderWidgets */;
+			targetProxy = 1A000000000000000000003B /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -528,6 +629,56 @@
 			};
 			name = Release;
 		};
+		1A0000000000000000000039 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 43;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = S1ReaderWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.15.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.faye.S1Reader.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		1A000000000000000000003A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 43;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = S1ReaderWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.15.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.faye.S1Reader.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -563,6 +714,15 @@
 			buildConfigurations = (
 				1A0000000000000000000027 /* Debug */,
 				1A0000000000000000000028 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A0000000000000000000035 /* Build configuration list for PBXNativeTarget "S1ReaderWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A0000000000000000000039 /* Debug */,
+				1A000000000000000000003A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

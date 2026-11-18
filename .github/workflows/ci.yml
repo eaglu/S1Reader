@@ -43,12 +43,32 @@ jobs:
             build | tee build.log | grep -E "error:|warning: .*(deprecated|unused)|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" build.log
 
+      # The app embeds the extension, so the step above already builds it; this
+      # one keeps the extension buildable on its own (a broken Live Activity
+      # would otherwise only show up when the app is built).
+      - name: Build widget extension (simulator)
+        run: |
+          set -o pipefail
+          pattern='error:|warning: .*(deprecated|unused)'
+          pattern="$pattern|BUILD (SUCCEEDED|FAILED)"
+          xcodebuild \
+            -project S1Reader.xcodeproj \
+            -scheme S1ReaderWidgets \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build-widgets \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee widget-build.log | grep -E "$pattern" || true
+          grep -q "BUILD SUCCEEDED" widget-build.log
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build.log
+          path: |
+            build.log
+            widget-build.log
           if-no-files-found: ignore
 
   test:

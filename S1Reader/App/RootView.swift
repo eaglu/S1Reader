@@ -14,7 +14,7 @@ struct RootView: View {
     /// visible without its bar for a beat.
     private var hidesTabBar: Bool {
         switch path.last {
-        case .thread, .latestThread, .linkedThread:
+        case .thread, .latestThread, .linkedThread, .readingThread:
             return true
         default:
             return false
@@ -46,6 +46,10 @@ struct RootView: View {
         // first layout often enough to make that unreliable.
         if DebugHooks.string("S1_OPEN") == "quotes" {
             QuoteGalleryView()
+        } else if DebugHooks.string("S1_OPEN") == "liveactivity" {
+            // The Lock Screen card on its own: the simulator cannot be locked
+            // from the command line, so this is how it gets looked at.
+            ReadingLiveActivityPreview()
         } else {
             tabs
         }
@@ -123,6 +127,11 @@ struct RootView: View {
         case .thread(let tid, let pid):
             tab = 0
             path = [.linkedThread(tid: tid, pid: pid)]
+        case .reading(let tid, let page):
+            // The reading Live Activity's way back in: same thread, the page the
+            // reader left off on, instead of the one their saved position says.
+            tab = 0
+            path = [.readingThread(tid: tid, page: page)]
         case .notices:
             tab = 1
             guard model.isLoggedIn else {
@@ -207,6 +216,8 @@ enum Route: Hashable {
     case latestThread(ThreadSummary)
     /// Reached through a link, where all we know is the id.
     case linkedThread(tid: String, pid: String?)
+    /// Reopened from the reading Live Activity: a thread and the page to land on.
+    case readingThread(tid: String, page: Int)
     case linkedForum(fid: String)
 }
 
@@ -227,6 +238,8 @@ struct RouteDestination: View {
             ThreadDetailView(summary: summary, startAtLastPage: true)
         case .linkedThread(let tid, let pid):
             LinkedThreadView(tid: tid, pid: pid)
+        case .readingThread(let tid, let page):
+            LinkedThreadView(tid: tid, pid: nil, page: page)
         case .linkedForum(let fid):
             LinkedForumView(fid: fid)
         }
