@@ -97,10 +97,10 @@ struct ThreadActionButton: View {
 /// because `arrow.uturn.left` carries a vertical tail the design does not have,
 /// and its stroke is thinner than the reference.
 struct ReturnGlyph: View {
-    /// 37pt canvas: about 28pt of ink, which is the arrow-to-disc ratio the
-    /// design uses (0.42 of the circle the glass button draws).
-    var size: CGFloat = 37
-    var lineWidth: CGFloat = 3
+    /// 27pt canvas: about 21pt of ink, the 40% of a 52pt button that keeps this
+    /// arrow the same optical size as the reply symbol beside it.
+    var size: CGFloat = 27
+    var lineWidth: CGFloat = 2.7
 
     var body: some View {
         ReturnGlyphShape()
