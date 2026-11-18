@@ -1,9 +1,10 @@
+import Foundation
 import XCTest
 
 /// 往上翻补更早的页：一次触顶只能补一页，而且读者看的那一楼不能动。
 ///
 /// 这一条只能用真实手势验证：缺陷来自滚动回调和 prepend 之间的相互触发，
-/// 单元测试看不到那个循环。需要网络。
+/// 单元测试看不到那个循环。需要网络：连不上 stage1st.com 时跳过。
 final class EarlierPageOverscrollTests: XCTestCase {
     /// 主题 2206666 有 328 楼，9 页，每页 40 楼：第 8 页是 #281–#320，第 9 页是 #321–#328。
     private let lastPage = 9
@@ -25,6 +26,7 @@ final class EarlierPageOverscrollTests: XCTestCase {
 
     /// 跳到最后一页后往上翻一次：只补第 8 页，读者那一楼还在原来的位置。
     func testOnePullAboveTheTopLoadsOnePageAndKeepsTheFloor() throws {
+        try requireNetwork()
         launch(jumpingTo: lastPage)
         let topBefore = topFloorLabel()
         XCTAssertEqual(topBefore, "#\(firstFloorOfLastPage)")
@@ -39,6 +41,7 @@ final class EarlierPageOverscrollTests: XCTestCase {
 
     /// 停留在一页中间时往上滑只是往回看，不该触发任何加载。
     func testPullingInsideTheListLoadsNothing() throws {
+        try requireNetwork()
         launch(jumpingTo: lastPage)
         pullAboveTheTop()
         XCTAssertEqual(loadedPages(), "\(lastPage - 1)-\(lastPage)")
@@ -49,6 +52,32 @@ final class EarlierPageOverscrollTests: XCTestCase {
 
         let state = describe(topBefore: topBefore)
         XCTAssertEqual(loadedPages(), "\(lastPage - 1)-\(lastPage)", "离开顶部也在加载：\(state)")
+    }
+
+    // MARK: - 网络前置
+
+    /// 这两条用例要打开线上主题 2206666 才有楼可翻。CI runner 访问不到
+    /// stage1st.com，等 30 秒拿不到任何楼层只会红在一条与代码无关的断言上，
+    /// 所以先探一次：连不上就跳过，有网的机器上照旧真跑。
+    private func requireNetwork() throws {
+        // 同 APIClient 用的入口，答不答得上来才是这件事的关键。
+        var request = URLRequest(url: URL(string: "https://stage1st.com/2b/")!)
+        request.timeoutInterval = 10
+
+        final class Probe {
+            var answered = false
+        }
+        let probe = Probe()
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            probe.answered = (response as? HTTPURLResponse) != nil
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 15)
+
+        guard probe.answered else {
+            throw XCTSkip("需要网络：连不上 stage1st.com，跳过这条依赖线上主题的用例")
+        }
     }
 
     // MARK: - 启动与手势
