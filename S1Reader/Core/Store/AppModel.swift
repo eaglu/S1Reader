@@ -40,7 +40,40 @@ final class AppModel {
         if !leftovers.isEmpty {
             result.append(Section(id: "other", title: "其他", forums: leftovers))
         }
+        return Self.pinningMainForumAheadOfHotZone(result)
+    }
+
+    // MARK: - Section order
+
+    /// The server keeps 热门新区 ahead of 主论坛, which is not the order the app
+    /// wants. Only that one pair is touched: 主论坛 is lifted to just before
+    /// 热门新区 and every other section keeps the order the server sent.
+    /// Anything that does not match (a renamed category, a category that is
+    /// missing) leaves the input untouched.
+    static func pinningMainForumAheadOfHotZone(_ input: [Section]) -> [Section] {
+        guard let mainIndex = input.firstIndex(where: { isMainForum($0.title) }),
+              let hotIndex = input.firstIndex(where: { isHotZone($0.title) }),
+              hotIndex < mainIndex
+        else { return input }
+        var result = input
+        // hotIndex is below mainIndex, so removing 主论坛 does not move 热门新区.
+        result.insert(result.remove(at: mainIndex), at: hotIndex)
         return result
+    }
+
+    static func isMainForum(_ title: String) -> Bool {
+        normalizedTitle(title).contains("主论坛")
+    }
+
+    static func isHotZone(_ title: String) -> Bool {
+        normalizedTitle(title).contains("热门新区")
+    }
+
+    /// Category names arrive with stray spacing (half- or full-width) and
+    /// sometimes a suffix like 「（新区）」, so matching drops whitespace and
+    /// asks for a substring instead of an exact equality.
+    private static func normalizedTitle(_ title: String) -> String {
+        String(title.filter { !$0.isWhitespace })
     }
 
     var isLoggedIn: Bool { member?.isLoggedIn == true }
