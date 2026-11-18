@@ -4,7 +4,8 @@ import SwiftUI
 /// and — once a quote has been followed — back to where the reader was. On
 /// iOS 26 and later it is a real Liquid Glass button, so it picks up the same
 /// material as the system chrome instead of a hand-drawn circle. Both states
-/// keep that glass; only the glyph swaps.
+/// keep that glass and both glyphs are `.primary`, so switching states changes
+/// the shape alone — never the colour.
 struct ThreadActionButton: View {
     enum Mode {
         case reply
@@ -24,13 +25,6 @@ struct ThreadActionButton: View {
         }
     }
 
-    /// The way back is chrome, not a second action, so it runs on untinted
-    /// glass; only reply wears the accent. `nil` rather than a conditional view
-    /// keeps the button in one place, so the glyph swap still animates.
-    private var tint: Color? {
-        mode == .reply ? Color.accentColor : nil
-    }
-
     @available(iOS 26.0, *)
     private var glassButton: some View {
         Button(action: action) {
@@ -39,7 +33,10 @@ struct ThreadActionButton: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
-        .tint(tint)
+        // No `.tint`: a tinted glass button paints its glass with the tint and
+        // pushes the glyph to white, which is what made reply and back differ in
+        // colour. Untinted glass lets both glyphs sit in the system label colour,
+        // which already follows the appearance.
         .accessibilityLabel(accessibilityLabel)
         .sensoryFeedback(.impact(weight: .light), trigger: mode)
         .padding(.trailing, 18)
@@ -49,7 +46,7 @@ struct ThreadActionButton: View {
     private var fallbackButton: some View {
         Button(action: action) {
             glyphs
-                .foregroundStyle(mode == .reply ? Color.accentColor : Color.primary)
+                .foregroundStyle(Color.primary)
                 .frame(width: 52, height: 52)
                 // A material circle keeps the glyph legible in both
                 // appearances; white on the accent fill was 2.6:1 in dark
@@ -72,8 +69,9 @@ struct ThreadActionButton: View {
         mode == .reply ? "回复本帖" : "返回到刚才的楼"
     }
 
-    /// Both glyphs share one slot, so the two states keep the same weight; the
-    /// outgoing one turns and shrinks away while the incoming one lands.
+    /// Both glyphs share one slot and one colour, so the two states keep the
+    /// same weight; the outgoing one turns and shrinks away while the incoming
+    /// one lands.
     private var glyphs: some View {
         ZStack {
             glyph(.reply).modifier(SwapTransition(isActive: mode == .reply, reduceMotion: reduceMotion))
