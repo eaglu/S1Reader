@@ -127,21 +127,38 @@ final class PagedListLoader<Item: Identifiable, Context> {
     /// Returns the rows that were added.
     @discardableResult
     func prepend(page target: Int) async -> [Item]? {
+        guard let result = await fetchPrepend(page: target) else { return nil }
+        return commitPrepend(result, page: target)
+    }
+
+    /// Fetches the page above the current one without touching the list.
+    ///
+    /// `commitPrepend` inserts it later. A screen that has to keep the reader's
+    /// floor still while the page is on the wire uses this pair so the rows do
+    /// not change height above the list until it knows where to put them back.
+    func fetchPrepend(page target: Int) async -> Page? {
         guard !isLoading, !isLoadingMore else { return nil }
         isLoadingMore = true
         defer { isLoadingMore = false }
 
         do {
             let result = try await fetch(target)
-            let fresh = merge(result.items, at: 0)
             errorMessage = nil
-            if let explicit = result.hasMore { hasMore = explicit }
-            onPageLoaded?(target, fresh, result.context)
-            return fresh
+            return result
         } catch {
             errorMessage = error.localizedDescription
             return nil
         }
+    }
+
+    /// Inserts a page that `fetchPrepend` brought back. Returns the new rows.
+    @discardableResult
+    func commitPrepend(_ result: Page, page target: Int) -> [Item] {
+        let fresh = merge(result.items, at: 0)
+        errorMessage = nil
+        if let explicit = result.hasMore { hasMore = explicit }
+        onPageLoaded?(target, fresh, result.context)
+        return fresh
     }
 
     /// Merges rows that arrived out of band (a poll for new replies) without

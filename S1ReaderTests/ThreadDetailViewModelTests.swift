@@ -47,10 +47,65 @@ final class ThreadDetailViewModelTests: XCTestCase {
 
         XCTAssertEqual(server.requested, [9, 8], "一次上拉只要了一页")
         XCTAssertEqual(returned, "p321", "要把读者原来那一楼交回去定位")
+        // 取回来先拿在手里：视图要等手指离开再插进列表，否则新页会顶在屏幕上。
+        XCTAssertEqual(model.firstLoadedPage, 9, "还没提交就动了页窗口")
+        XCTAssertEqual(model.posts.first?.pid, "p321", "还没提交就插进列表了")
+        XCTAssertTrue(model.isLoadingEarlier, "页在手里时行上仍是在加载")
+
+        let pinned = model.commitEarlier()
+
+        XCTAssertEqual(pinned, "p321")
         XCTAssertEqual(model.firstLoadedPage, 8)
         XCTAssertEqual(model.loadedPages, 9)
         XCTAssertEqual(model.posts.first?.pid, "p281")
         XCTAssertEqual(model.posts.count, 80, "假服务器每页都是满的 40 楼")
+        XCTAssertFalse(model.isLoadingEarlier)
+    }
+
+    /// 提交只发生一次：视图每帧只有一条路径会调它。
+    func testCommittingTwiceInsertsThePageOnce() async throws {
+        let server = FakeThreadServer()
+        let model = makeModel(server)
+        await model.loadPage(9)
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.commitEarlier(), "p321")
+        XCTAssertNil(model.commitEarlier(), "同一页不该插第二次")
+        XCTAssertEqual(model.posts.count, 80)
+        XCTAssertEqual(model.posts.first?.pid, "p281")
+        XCTAssertEqual(server.requested, [9, 8])
+    }
+
+    /// 取回来的页被丢掉时列表不动，下一次触顶照常补页。
+    func testDiscardingTheFetchedPageLeavesTheListAlone() async throws {
+        let server = FakeThreadServer()
+        let model = makeModel(server)
+        await model.loadPage(9)
+        await model.loadEarlier()
+
+        model.discardPendingEarlier()
+
+        XCTAssertNil(model.commitEarlier())
+        XCTAssertFalse(model.isLoadingEarlier)
+        XCTAssertEqual(model.posts.first?.pid, "p321")
+        XCTAssertEqual(model.firstLoadedPage, 9)
+
+        let retried = await model.loadEarlier()
+        XCTAssertEqual(retried, "p321")
+        XCTAssertEqual(server.requested, [9, 8, 8])
+    }
+
+    /// 拿到页之后跳去了别的页：这一页已经不属于当前窗口，提交时要丢掉。
+    func testAPageFetchedForAnOldWindowIsDroppedOnCommit() async throws {
+        let server = FakeThreadServer()
+        let model = makeModel(server)
+        await model.loadPage(9)
+        await model.loadEarlier()
+
+        await model.loadPage(3)
+        XCTAssertNil(model.commitEarlier(), "跳页后旧窗口的上一页不能再插进来")
+        XCTAssertEqual(model.firstLoadedPage, 3)
+        XCTAssertEqual(model.posts.first?.pid, "p81")
     }
 
     /// 上拉请求还没回来时，后面的触顶直接丢弃，不排队。
@@ -75,6 +130,9 @@ final class ThreadDetailViewModelTests: XCTestCase {
         let landed = await inFlight.value
         XCTAssertEqual(landed, "p321")
         XCTAssertEqual(server.requested, [9, 8])
+        XCTAssertTrue(model.isLoadingEarlier, "页已经到手，但要等视图提交")
+
+        model.commitEarlier()
         XCTAssertFalse(model.isLoadingEarlier)
         XCTAssertEqual(model.firstLoadedPage, 8)
     }
@@ -86,7 +144,9 @@ final class ThreadDetailViewModelTests: XCTestCase {
         await model.loadPage(9)
 
         await model.loadEarlier()
+        model.commitEarlier()
         let returned = await model.loadEarlier()
+        model.commitEarlier()
 
         XCTAssertEqual(server.requested, [9, 8, 7])
         XCTAssertEqual(returned, "p281")
@@ -111,6 +171,7 @@ final class ThreadDetailViewModelTests: XCTestCase {
 
         server.failingPages = []
         let retried = await model.loadEarlier()
+        model.commitEarlier()
         XCTAssertEqual(retried, "p321")
         XCTAssertEqual(model.firstLoadedPage, 8)
     }

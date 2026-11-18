@@ -30,6 +30,9 @@ final class ThreadDetailViewModel {
     /// arrives while the page is still on the wire is dropped instead of
     /// queued behind it.
     private(set) var isLoadingEarlier = false
+    /// A page fetched for above the list that has not been inserted yet. Held
+    /// until the reader's pull is over: the list only takes it at rest.
+    private var pendingEarlier: (target: Int, anchor: String?, page: PagedListLoader<Post, ThreadPage>.Page)?
 
     // MARK: - Poll
 
@@ -230,8 +233,12 @@ final class ThreadDetailViewModel {
         await pager.loadMore()
     }
 
-    /// Fetches the page above the one that is loaded and puts it in front of the
-    /// list. Returns the post that was on top so the reader keeps their place.
+    /// Fetches the page above the one that is loaded and keeps it in hand.
+    /// Returns the post that was on top, so the reader keeps their place.
+    ///
+    /// The rows only enter the list in `commitEarlier`: inserting them while the
+    /// reader is still pulling moves the content above their floor, and the new
+    /// page stays on screen until the gesture ends. The view commits at rest.
     @discardableResult
     func loadEarlier() async -> String? {
         // The flag is raised before anything can suspend. A pull that arrives
@@ -240,17 +247,48 @@ final class ThreadDetailViewModel {
         // their floor.
         guard hasEarlier, !isLoadingEarlier, !pager.isLoading, !isLoadingMore else { return nil }
         isLoadingEarlier = true
-        defer { isLoadingEarlier = false }
 
         let target = firstLoadedPage - 1
         let anchor = posts.first?.pid
-        guard let older = await pager.prepend(page: target) else { return nil }
-        firstLoadedPage = target
+        guard let older = await pager.fetchPrepend(page: target), !older.items.isEmpty else {
+            isLoadingEarlier = false
+            return nil
+        }
+        pendingEarlier = (target, anchor, older)
         DebugHooks.log(
-            "S1 loadEarlier page=\(target) added=\(older.count) range=\(loadedPageRange)"
-                + " posts=\(posts.count) anchor=\(anchor ?? "-")"
+            "S1 loadEarlier fetched page=\(target) rows=\(older.items.count)"
+                + " anchor=\(anchor ?? "-")"
         )
-        return older.isEmpty ? nil : anchor
+        return anchor
+    }
+
+    /// Puts the page `loadEarlier` fetched above the list. The reader's floor
+    /// stays exactly where it was: the rows are inserted and the list is put
+    /// back on the anchor by the caller in the same update.
+    @discardableResult
+    func commitEarlier() -> String? {
+        guard let pending = pendingEarlier, isLoadingEarlier else { return nil }
+        pendingEarlier = nil
+        isLoadingEarlier = false
+        // A jump or a reload while the page was in hand replaced the window it
+        // belongs to; inserting it now would drop it under the wrong pages.
+        guard pending.target == firstLoadedPage - 1 else {
+            DebugHooks.log("S1 loadEarlier dropped stale page=\(pending.target)")
+            return nil
+        }
+        let fresh = pager.commitPrepend(pending.page, page: pending.target)
+        firstLoadedPage = pending.target
+        DebugHooks.log(
+            "S1 loadEarlier page=\(pending.target) added=\(fresh.count) range=\(loadedPageRange)"
+                + " posts=\(posts.count) anchor=\(pending.anchor ?? "-")"
+        )
+        return fresh.isEmpty ? nil : pending.anchor
+    }
+
+    /// Drops a fetched page that will never be inserted (a jump took over).
+    func discardPendingEarlier() {
+        pendingEarlier = nil
+        isLoadingEarlier = false
     }
 
     /// Jumps back to the post the reader stopped at last time.
