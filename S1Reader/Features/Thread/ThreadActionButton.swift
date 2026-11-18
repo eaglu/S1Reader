@@ -71,7 +71,9 @@ struct ThreadActionButton: View {
 
     /// Both glyphs share one slot and one colour, so the two states keep the
     /// same weight; the outgoing one turns and shrinks away while the incoming
-    /// one lands.
+    /// one lands. Their ink is matched (23.4 x 20.2pt against 21.2 x 20.2pt),
+    /// but the shapes are deliberately different: a closed reply arrow versus a
+    /// thin way-back line.
     private var glyphs: some View {
         ZStack {
             glyph(.reply).modifier(SwapTransition(isActive: mode == .reply, reduceMotion: reduceMotion))
@@ -83,9 +85,15 @@ struct ThreadActionButton: View {
     private func glyph(_ glyphMode: Mode) -> some View {
         switch glyphMode {
         case .reply:
-            Image(systemName: "arrow.turn.up.left")
-                .font(.title3.weight(.semibold))
-                .imageScale(.medium)
+            // The outlined reply arrow, not `arrow.turn.up.left`: that one is a
+            // thin leftward line with a bend, which at 52pt read as a twin of
+            // the thin line `ReturnGlyph` below. This is the system's reply
+            // silhouette — a broad closed arrow, so the two states differ in
+            // shape language and not just in direction. 22pt puts its ink at
+            // 23.4 x 20.2pt against the way-back glyph's 21.2 x 20.2pt, so the
+            // swap keeps the same optical size.
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.system(size: 22, weight: .semibold))
         case .back:
             ReturnGlyph()
         }
