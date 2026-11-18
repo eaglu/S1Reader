@@ -6,6 +6,17 @@ struct CheckNewRepliesOnOverscroll: ViewModifier {
     let isEnabled: Bool
     let action: () -> Void
 
+    /// How far the list has to be dragged past its last post before the pull
+    /// counts. iOS moves the content far less than the finger travels here, so
+    /// this is deliberately small: a normal pull yields 40–60 points of
+    /// overshoot, and the 55 this used to ask for never happened — the check
+    /// simply never ran. One pull still asks once, through `isArmed`.
+    private static let trigger: CGFloat = 14
+    /// Overshoot below this means the list is back on its last post, so the
+    /// next pull is a new approach.
+    private static let rearm: CGFloat = 4
+
+    @State private var isArmed = true
     @State private var lastFired = Date.distantPast
 
     func body(content: Content) -> some View {
@@ -18,10 +29,20 @@ struct CheckNewRepliesOnOverscroll: ViewModifier {
                 )
                 return geometry.contentOffset.y - resting
             } action: { _, overshoot in
+                guard isEnabled else {
+                    // Nothing left to ask about; a later reload starts clean.
+                    isArmed = true
+                    return
+                }
+                guard overshoot >= Self.trigger else {
+                    if overshoot < Self.rearm { isArmed = true }
+                    return
+                }
                 // Rubber-banding holds the gesture for several updates, so one
                 // pull must ask the server exactly once.
-                guard isEnabled, overshoot > 55 else { return }
-                guard Date().timeIntervalSince(lastFired) > 1.5 else { return }
+                guard isArmed else { return }
+                guard Date().timeIntervalSince(lastFired) > 1 else { return }
+                isArmed = false
                 lastFired = Date()
                 action()
             }
