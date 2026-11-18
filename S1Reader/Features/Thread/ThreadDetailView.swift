@@ -201,6 +201,9 @@ struct ThreadDetailView: View {
                 await jump(to: pid)
             }
             await ThreadDetailDebugScript(hooks: debugHooks).run()
+            #if DEBUG
+            await openDebugAuthorSheetIfNeeded()
+            #endif
         }
         // No pull-to-refresh here: the pull past the top is this screen's
         // "earlier replies" gesture, and a refresh would replace the window with
@@ -852,6 +855,7 @@ extension ThreadDetailView {
             isBlocked: blocks.isBlocked(profile.authorID),
             canBlock: blocks.canBlock(profile.authorID),
             isFavorite: isFavorite,
+            isLoggedIn: app.isLoggedIn,
             onOpen: { post in Task { await jump(to: post.pid) } },
             onToggleBlock: { toggleBlock(profile) },
             onToggleFavorite: toggleFavorite
@@ -887,6 +891,24 @@ extension ThreadDetailView {
 
 /// The `S1_*` rehearsal hooks, wired to this screen's own state.
 extension ThreadDetailView {
+    #if DEBUG
+    /// `S1_AUTHOR_SHEET=<pid|first>` opens the author card for a floor. The
+    /// simulator cannot be tapped from the command line, so this is how the
+    /// sheet's logged-out and signed-in states get photographed.
+    func openDebugAuthorSheetIfNeeded() async {
+        guard let target = DebugHooks.string("S1_AUTHOR_SHEET") else { return }
+        for _ in 0..<50 where model.posts.isEmpty {
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        let post = target == "first"
+            ? model.posts.first
+            : model.posts.first(where: { $0.pid == target })
+        guard let post else { return }
+        try? await Task.sleep(for: .milliseconds(700))
+        sheet = .author(AuthorProfile(authorID: post.authorID, name: post.author))
+    }
+    #endif
+
     var debugHooks: ThreadDetailDebugScript.Hooks {
         ThreadDetailDebugScript.Hooks(
             model: model,

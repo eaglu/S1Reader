@@ -67,6 +67,24 @@ enum DebugHooks {
         #endif
     }
 
+    /// `S1_DEMO=1` fixtures for the author card's remote sections, which are
+    /// otherwise impossible to see without a real S1 session.
+    static var demoAuthorThreads: [AuthorSpaceParser.ThreadItem]? {
+        #if DEBUG
+        DemoMode.isEnabled ? DemoMode.authorThreads : nil
+        #else
+        nil
+        #endif
+    }
+
+    static var demoAuthorReplies: [AuthorSpaceParser.ReplyItem]? {
+        #if DEBUG
+        DemoMode.isEnabled ? DemoMode.authorReplies : nil
+        #else
+        nil
+        #endif
+    }
+
     /// `S1_PERF_BENCH=1` measures the two ways a post body is scanned for
     /// pictures. Returns the printable line, or `nil` when the benchmark is off.
     static func imageScanBenchmark(_ htmls: [String]) async -> String? {

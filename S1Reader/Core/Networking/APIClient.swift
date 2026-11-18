@@ -447,6 +447,77 @@ actor APIClient {
         return result.list
     }
 
+    // MARK: - Another member's history
+
+    /// Threads the author started, read from their Discuz space page.
+    ///
+    /// The mobile API cannot answer this for anybody but the signed-in member,
+    /// so the space page is scraped instead. It answers with a login prompt
+    /// when the cookie jar is empty, which surfaces as `.notLoggedIn`.
+    func userThreads(uid: String, page: Int = 1) async throws -> AuthorSpaceParser.ThreadPage {
+        let html = try await spaceHTML(uid: uid, type: "thread", page: page)
+        do {
+            return try AuthorSpaceParser.threads(fromHTML: html, page: page)
+        } catch let error as AuthorSpaceParser.Failure {
+            if error == .loginRequired { throw APIError.notLoggedIn }
+            throw APIError.decoding(error)
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
+    /// Replies the author wrote, one per floor, from the same space page.
+    func userPosts(uid: String, page: Int = 1) async throws -> AuthorSpaceParser.ReplyPage {
+        let html = try await spaceHTML(uid: uid, type: "reply", page: page)
+        do {
+            return try AuthorSpaceParser.replies(fromHTML: html, page: page)
+        } catch let error as AuthorSpaceParser.Failure {
+            if error == .loginRequired { throw APIError.notLoggedIn }
+            throw APIError.decoding(error)
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
+    /// Fetches an HTML page from the forum with the session cookies attached.
+    ///
+    /// Deliberately not `guest`: Discuz refuses the space's `do=thread` to
+    /// guests outright, so a cookieless request can only ever produce the
+    /// login prompt.
+    private func spaceHTML(uid: String, type: String, page: Int) async throws -> String {
+        guard var components = URLComponents(
+            url: URL(string: "home.php", relativeTo: Self.baseURL)!,
+            resolvingAgainstBaseURL: false
+        ) else { throw APIError.badURL }
+
+        components.queryItems = [
+            URLQueryItem(name: "mod", value: "space"),
+            URLQueryItem(name: "uid", value: uid),
+            URLQueryItem(name: "do", value: "thread"),
+            URLQueryItem(name: "view", value: "me"),
+            URLQueryItem(name: "type", value: type),
+            URLQueryItem(name: "from", value: "space"),
+            URLQueryItem(name: "page", value: String(max(1, page)))
+        ]
+        guard let url = components.url else { throw APIError.badURL }
+
+        var request = URLRequest(url: url)
+        request.setValue("https://stage1st.com/2b/", forHTTPHeaderField: "Referer")
+        request.httpShouldHandleCookies = true
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.transport(error)
+        }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw Self.httpError(http.statusCode)
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     func logout() async {
         if let formhash {
             _ = try? await rawPost("login", ["action": "logout", "formhash": formhash])
