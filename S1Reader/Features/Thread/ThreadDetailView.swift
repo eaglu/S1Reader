@@ -156,7 +156,11 @@ struct ThreadDetailView: View {
                     }
                 }
         }
-        .navigationTitle(model.title)
+        // The thread's title belongs to the page, not to the bar: it is drawn
+        // once, in ThreadHeaderView. A title here repeated it — truncated — a
+        // thumb's width above the full one. The bar keeps only its actions, and
+        // an empty title is also what lets the back button read 返回.
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.posts.count) {
             await PostBodyCache.shared.warm(posts: model.posts, scale: HTMLParser.textScale(for: mainDynamicTypeSize))

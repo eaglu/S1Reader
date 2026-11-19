@@ -38,6 +38,24 @@ final class ThreadRenderingTests: XCTestCase {
         add(screenshot(named: "thread"))
     }
 
+    /// 标题只画一次：在 ThreadHeaderView 里，不在顶栏里。
+    ///
+    /// 顶栏再放一份时，它会被截断成「为啥中文网络上各家 AI 的拟…」，
+    /// 而正文里那份完整标题就摆在它下面：同一句话在屏幕上出现两次。
+    func testTheThreadTitleIsDrawnOnce() throws {
+        try openSomeThread()
+        XCTAssertTrue(bodies.element(boundBy: 0).waitForExistence(timeout: 20))
+
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), "顶栏没出现")
+        // 顶栏只剩动作；标题是正文的内容，不是栏的标题。
+        XCTAssertEqual(
+            bar.staticTexts.count, 0,
+            "顶栏里又出现了文字（标题或截断后的标题）：\(bar.debugDescription)"
+        )
+        add(screenshot(named: "thread-top"))
+    }
+
     func testScrollingForwardKeepsFloorsRendered() throws {
         try openSomeThread()
         XCTAssertTrue(bodies.element(boundBy: 0).waitForExistence(timeout: 20))
