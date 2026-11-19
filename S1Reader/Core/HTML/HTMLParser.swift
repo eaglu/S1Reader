@@ -233,9 +233,33 @@ enum HTMLParser {
 
     // MARK: - Text attributes
 
-    /// Quoted text drops one type step (17pt body → 15pt, `.subheadline`) so the
-    /// card is a layer rather than a second reply.
-    fileprivate static let quoteTextScale: CGFloat = 15.0 / 17.0
+    /// The reply body's size at the default Dynamic Type setting. Plain paragraphs
+    /// are drawn in it by the view (`PostContentView`); every size the parser bakes
+    /// into a run hangs off the same number, so a bold word cannot land on a
+    /// different size than the sentence around it. 17pt (`.body`) read a touch
+    /// small for long replies, and 18 is the smallest step that shows.
+    static let bodyPointSize: CGFloat = 18
+
+    /// What the body was before the bump. The accessibility sizes keep it: the
+    /// table below is Apple's own `.body` curve, so 17pt there is already 28pt at
+    /// `.accessibility1` — a point on top of that buys nothing but two fewer
+    /// characters a line, which is why the bigger base stops at the last of the
+    /// normal sizes.
+    static let accessibilityBodyPointSize: CGFloat = 17
+
+    /// `textScale` value of `.accessibility1`, where `.body` itself jumps to 28pt.
+    fileprivate static let accessibilityScale: CGFloat = 1.65
+
+    /// The reply body in points at `scale`, for both the paragraph the view draws
+    /// and the runs the parser styles.
+    static func bodySize(scale: CGFloat) -> CGFloat {
+        let base = scale >= accessibilityScale ? accessibilityBodyPointSize : bodyPointSize
+        return base * scale
+    }
+
+    /// Quoted text drops one type step (18pt body → 16pt) so the card is a layer
+    /// rather than a second reply.
+    fileprivate static let quoteTextScale: CGFloat = 16.0 / 18.0
 
     static func fontSize(base: CGFloat) -> CGFloat {
         base * quoteTextScale
@@ -248,7 +272,9 @@ enum HTMLParser {
             // quote cannot outshout the reply around it. The colour is left to
             // the card (QuoteStyle.body): it owns the fill the text sits on, so
             // it is the only place that can hold the contrast floor.
-            var font = Font.system(size: fontSize(base: min(style.size ?? 17 * scale, 17 * scale)))
+            var font = Font.system(
+                size: fontSize(base: min(style.size ?? bodySize(scale: scale), bodySize(scale: scale)))
+            )
             if style.bold { font = font.bold() }
             if style.italic { font = font.italic() }
             string.font = font
@@ -262,7 +288,7 @@ enum HTMLParser {
             return
         }
         if style.bold || style.italic || style.size != nil {
-            var font = Font.system(size: (style.size ?? 17) * scale)
+            var font = Font.system(size: (style.size ?? bodySize(scale: scale)))
             if style.bold { font = font.bold() }
             if style.italic { font = font.italic() }
             string.font = font

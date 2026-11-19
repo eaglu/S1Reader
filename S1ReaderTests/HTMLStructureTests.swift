@@ -98,11 +98,22 @@ final class HTMLStructureTests: XCTestCase {
     }
 
     func testQuotedTextStepsDownOneTypeSize() {
-        // The reply body is 17pt (`.body`), so the quote body lands on 15pt
-        // (`.subheadline`): one step down, whatever `font` the author asked for.
-        XCTAssertEqual(HTMLParser.fontSize(base: 17), 15, accuracy: 0.01)
-        XCTAssertEqual(HTMLParser.fontSize(base: 24), 21.18, accuracy: 0.01)
-        XCTAssertLessThan(HTMLParser.fontSize(base: 17), 17)
+        // The reply body is 18pt, so the quote body lands on 16pt: one step down,
+        // whatever `font` the author asked for.
+        XCTAssertEqual(HTMLParser.bodyPointSize, 18)
+        XCTAssertEqual(HTMLParser.fontSize(base: HTMLParser.bodyPointSize), 16, accuracy: 0.01)
+        XCTAssertEqual(HTMLParser.fontSize(base: 24), 21.33, accuracy: 0.01)
+        XCTAssertLessThan(HTMLParser.fontSize(base: HTMLParser.bodyPointSize), HTMLParser.bodyPointSize)
+    }
+
+    func testTheBiggerBodyStopsAtTheAccessibilitySizes() {
+        // The extra point is a comfort tweak for the sizes people read at, not
+        // something to multiply: `.accessibility1` is where the body used to be
+        // 28pt, and 18pt on that scale would be 30.
+        XCTAssertEqual(HTMLParser.bodySize(scale: 1), 18, accuracy: 0.01)
+        XCTAssertEqual(HTMLParser.bodySize(scale: 1.35), 24.3, accuracy: 0.01)
+        XCTAssertEqual(HTMLParser.bodySize(scale: 1.65), 28.05, accuracy: 0.01)
+        XCTAssertEqual(HTMLParser.bodySize(scale: 3.12), 53.04, accuracy: 0.01)
     }
 
     func testQuotedFloorComesFromTheHeaderLink() {

@@ -13,7 +13,7 @@ struct ThreadHeaderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.title3.weight(.semibold))
+                .font(.title2.weight(.semibold))
             // Stacked at accessibility sizes: in a row the author's name is
             // squeezed to an ellipsis and the numbers wrap mid-word.
             Group {
@@ -23,7 +23,7 @@ struct ThreadHeaderView: View {
                     HStack(spacing: 12) { metadata }
                 }
             }
-            .font(.caption)
+            .font(.footnote)
             .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

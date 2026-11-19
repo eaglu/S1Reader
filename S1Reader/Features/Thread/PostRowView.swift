@@ -136,7 +136,7 @@ struct PostRowView: View {
                         AvatarView(uid: post.authorID, name: post.author, size: 24)
 
                         Text(post.author)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.callout.weight(.semibold))
                             .lineLimitForAccessibility(1)
                     }
                     // 44pt target around a 24pt avatar, without a taller row.
@@ -148,7 +148,7 @@ struct PostRowView: View {
                 AvatarView(uid: post.authorID, name: post.author, size: 24)
 
                 Text(post.author)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.callout.weight(.semibold))
                     .lineLimitForAccessibility(1)
             }
 
@@ -157,11 +157,11 @@ struct PostRowView: View {
 
         let when = HStack(spacing: 8) {
             Text("#\(post.position)")
-                .font(.caption.monospacedDigit())
+                .font(.footnote.monospacedDigit())
                 .foregroundStyle(.tertiary)
 
             Text(Formatters.relative(post.dateline))
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(.tertiary)
         }
 
@@ -203,6 +203,13 @@ struct PostContentView: View {
     @State private var saveMessage: String?
     @State private var needsPhotoPermission = false
     @State private var savedSuccessfully = 0
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// Size for the paragraphs that carry no inline formatting of their own. The
+    /// parser bakes the same number into the runs it does style, so a bold word
+    /// cannot land on a different size than its sentence.
+    private var bodySize: CGFloat {
+        HTMLParser.bodySize(scale: HTMLParser.textScale(for: dynamicTypeSize))
+    }
 
     private enum Block {
         case text(Text)
@@ -264,6 +271,10 @@ struct PostContentView: View {
                 switch block {
                 case .text(let text):
                     text
+                        // A paragraph with no formatting carries no font of its
+                        // own, so it takes the one the view gives it. A formatted
+                        // run keeps the size the parser baked in.
+                        .font(.system(size: bodySize))
                         .fixedSize(horizontal: false, vertical: true)
                 case .quote(let quote):
                     QuoteCard(quote: quote, onQuoteTap: onQuoteTap)
@@ -429,7 +440,7 @@ private struct QuoteCard: View {
     private func headerRow(_ header: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(header)
-                .font(.caption)
+                .font(.footnote)
                 .foregroundStyle(QuoteStyle.header)
                 .fixedSize(horizontal: false, vertical: true)
             if isControl {
