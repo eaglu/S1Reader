@@ -5,10 +5,13 @@ import WidgetKit
 /// Renders the thread the reader left behind: the Lock Screen card, the
 /// expanded island and both compact forms.
 ///
-/// Colours are semantic (`.primary`, `.secondary`, `.tint`) and nothing sets a
-/// fixed font size, so the card follows light/dark and Dynamic Type the same way
-/// the app does. Live Activity views are rendered out of process and cannot read
-/// the app's environment, so the app's theme is not available here anyway.
+/// The island is a glance too, so each form carries one idea: the compact pair
+/// is page → progress, the expanded form is icon + title + page, with the
+/// excerpt under it. Colours are semantic (`.primary`, `.secondary`,
+/// `.tertiary`) and no font size is fixed, so light/dark and Dynamic Type work
+/// the way they do in the app. Live Activity views are rendered out of process
+/// and cannot read the app's environment, so the app's theme is not available
+/// here anyway.
 struct ReadingLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: ReadingActivityAttributes.self) { context in
@@ -18,14 +21,14 @@ struct ReadingLiveActivityWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "text.book.closed.fill")
-                        .font(.title3)
-                        .foregroundStyle(.tint)
+                    Image(systemName: "text.book.closed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Text(context.state.compactPageLabel)
-                        .font(.caption)
+                        .font(.caption2)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -33,35 +36,49 @@ struct ReadingLiveActivityWidget: Widget {
                     Text(context.state.title)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        // The island has its own sizing; the cap keeps an
+                        // accessibility size from crowding the page label.
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(spacing: 6) {
-                        Text(context.state.pageLabel)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        // The page is already in the trailing region; the
+                        // bottom line is the excerpt plus the percentage.
+                        Text(context.state.excerpt)
                             .font(.caption)
-                            .monospacedDigit()
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         Spacer(minLength: 8)
-                        Label("继续阅读", systemImage: "chevron.forward")
-                            .font(.caption.weight(.semibold))
-                            .labelStyle(.titleAndIcon)
+                        Text(context.state.progressLabel)
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.tertiary)
                     }
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                 }
             } compactLeading: {
-                Image(systemName: "text.book.closed.fill")
-                    .foregroundStyle(.tint)
-                    .accessibilityLabel("正在阅读")
-            } compactTrailing: {
+                // Numbers only: the island is too small for a wordy label.
                 Text(context.state.compactPageLabel)
                     .font(.caption2)
                     .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                    .accessibilityLabel("正在阅读 \(context.state.pageLabel)")
+            } compactTrailing: {
+                Text(context.state.progressLabel)
+                    .font(.caption2)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                    .accessibilityLabel("阅读进度 \(context.state.progressLabel)")
             } minimal: {
-                Image(systemName: "text.book.closed.fill")
-                    .foregroundStyle(.tint)
+                Image(systemName: "text.book.closed")
+                    .foregroundStyle(.primary)
                     .accessibilityLabel("正在阅读")
             }
             .widgetURL(link(for: context))
-            .keylineTint(.accentColor)
         }
     }
 

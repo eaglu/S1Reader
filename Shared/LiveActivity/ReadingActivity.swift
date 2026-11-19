@@ -52,7 +52,13 @@ struct ReadingActivityAttributes: ActivityAttributes {
         /// "398/483" — the compact island has room for numbers, not words.
         var compactPageLabel: String { "\(page)/\(pageCount)" }
 
-        /// How far through the thread the reader is, for the lock-screen bar.
+        /// "82%" — the compact island trailing, the expanded bottom line and
+        /// the Lock Screen pill all read the same number.
+        var progressLabel: String {
+            "\(Int((progress * 100).rounded()))%"
+        }
+
+        /// How far through the thread the reader is, for the percentage readouts.
         var progress: Double {
             guard pageCount > 1 else { return page > 0 ? 1 : 0 }
             return min(1, max(0, Double(page - 1) / Double(pageCount - 1)))

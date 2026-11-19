@@ -68,6 +68,7 @@ final class ReadingActivityTests: XCTestCase {
         XCTAssertEqual(state.author, "eaglu")
         XCTAssertEqual(state.pageLabel, "第 398/483 页")
         XCTAssertEqual(state.compactPageLabel, "398/483")
+        XCTAssertEqual(state.progressLabel, "82%")
         XCTAssertEqual(state.progress, 397.0 / 482.0, accuracy: 0.0001)
         XCTAssertEqual(state.excerpt, "第一行 第二行", "the lock screen line is one line")
         XCTAssertTrue(state.isReady)
@@ -80,6 +81,7 @@ final class ReadingActivityTests: XCTestCase {
         )
         XCTAssertEqual(tooHigh.page, 10)
         XCTAssertEqual(tooHigh.progress, 1)
+        XCTAssertEqual(tooHigh.progressLabel, "100%")
 
         let zero = ReadingActivityAttributes.ContentState(
             title: "t", page: 0, pageCount: 0
@@ -87,6 +89,8 @@ final class ReadingActivityTests: XCTestCase {
         XCTAssertEqual(zero.page, 1)
         XCTAssertEqual(zero.pageCount, 1)
         XCTAssertEqual(zero.pageLabel, "第 1/1 页")
+        // A one-page thread is already finished, so the pill reads full.
+        XCTAssertEqual(zero.progressLabel, "100%")
     }
 
     func testEmptyAuthorBecomesNil() {
