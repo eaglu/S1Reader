@@ -188,6 +188,80 @@ final class ThreadDetailViewModelTests: XCTestCase {
         XCTAssertFalse(model.hasEarlier)
     }
 
+    /// 卡片上写的就是这一页：只该发这一个请求，不要把第 1 页先拉一遍再丢掉。
+    func testOpeningFromTheCardLoadsOnlyThePageOnTheCard() async throws {
+        let server = FakeThreadServer()
+        let model = makeModel(server)
+        ReadingProgressStore.shared.clear(tid: "9")
+
+        await model.openAtPage(3)
+
+        XCTAssertEqual(server.requested, [3], "跳页只该要卡片上那一页")
+        XCTAssertEqual(model.loadedPages, 3)
+        XCTAssertEqual(model.firstLoadedPage, 3)
+        XCTAssertEqual(model.posts.first?.pid, "p81")
+        XCTAssertNil(
+            ReadingProgressStore.shared.position(for: "9"),
+            "落地过程中不能把第 1 页写成阅读进度"
+        )
+    }
+
+    /// 翻页还在线上时点卡片回来：跳页要等它落地，不能被吞掉后停在第 1 页。
+    func testTheJumpSurvivesAPageThatIsAlreadyOnTheWire() async throws {
+        let server = FakeThreadServer()
+        let model = makeModel(server)
+        await model.loadIfNeeded()
+        XCTAssertEqual(model.loadedPages, 1)
+
+        server.holdPage = 2
+        server.isHolding = true
+        let scrolling = Task { await model.loadMore() }
+        await waitUntil("第 2 页还没发出去") { server.requested == [1, 2] }
+
+        let jumping = Task { await model.openAtPage(5) }
+        // 让跳页真正等在这条请求后面，再把它放掉。
+        try? await Task.sleep(for: .milliseconds(150))
+        server.isHolding = false
+        await scrolling.value
+        await jumping.value
+
+        XCTAssertEqual(model.loadedPages, 5, "跳页不能被正在飞的翻页吞掉")
+        XCTAssertEqual(model.firstLoadedPage, 5)
+        XCTAssertEqual(model.posts.first?.pid, "p161")
+    }
+
+    /// 跳页途中不记阅读进度：那几行属于还没跳走的那一页。
+    func testNoReadingPositionWhileLanding() async throws {
+        let server = FakeThreadServer()
+        let model = makeModel(server)
+        await model.loadIfNeeded()
+
+        XCTAssertNil(
+            model.readingPosition(visiblePid: "p1", isRestoring: true),
+            "落地途中不能把第 1 页写进阅读进度"
+        )
+
+        await model.openAtPage(3)
+
+        let saved = model.readingPosition(visiblePid: "p81", isRestoring: false)
+        XCTAssertEqual(saved?.pid, "p81")
+        XCTAssertEqual(saved?.position, 81, "落地之后记的是目标页那一楼")
+    }
+
+    /// 卡片该写读者正在看的那一页，而不是窗口最下面那一页。
+    func testTheCardPageFollowsTheFloorOnScreenNotTheLastLoadedPage() async throws {
+        let server = FakeThreadServer()
+        let model = makeModel(server)
+        await model.loadPage(3)
+        await model.loadEarlier()
+        model.commitEarlier()
+
+        XCTAssertEqual(model.loadedPages, 3, "窗口底部仍是第 3 页")
+        XCTAssertEqual(model.page(ofPid: "p50"), 2, "读者翻上去了，卡片该写第 2 页")
+        XCTAssertEqual(model.page(ofPid: "p100"), 3)
+        XCTAssertNil(model.page(ofPid: "p1"), "不在列表里的楼层没有页码")
+    }
+
     // MARK: - 支撑
 
     private func makeModel(_ server: FakeThreadServer) -> ThreadDetailViewModel {

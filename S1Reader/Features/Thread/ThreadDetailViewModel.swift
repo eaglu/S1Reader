@@ -209,9 +209,62 @@ final class ThreadDetailViewModel {
 
     func loadPage(_ target: Int) async {
         let clamped = min(max(1, target), pageCount)
+        await waitForPager()
         await pager.loadPage(clamped)
         guard pager.page == clamped, pager.errorMessage == nil else { return }
         firstLoadedPage = clamped
+    }
+
+    /// Opens the thread straight at `target`, without fetching page one first.
+    ///
+    /// The reading Live Activity hands back the page the reader left on. Loading
+    /// the head of the thread before jumping to it is what used to leave them on
+    /// page one: the jump could be dropped (a page was still on the wire) while
+    /// page one — already in the list — stayed put. One request, one page.
+    func openAtPage(_ target: Int) async {
+        await loadPage(target)
+        guard loadedPages == min(max(1, target), pageCount) else {
+            // The jump did not take (a failed request): a thread whose head is
+            // on screen beats a screen with nothing on it.
+            await loadIfNeeded()
+            return
+        }
+        ThreadVisitStore.shared.markSeen(tid: summary.tid, replies: max(0, totalPosts - 1))
+    }
+
+    /// Waits out a page that is already on the wire. `loadPage` is a jump, not a
+    /// scroll: dropping it because the list happens to be loading the next page
+    /// of a scroll is exactly how "land on page 398" used to end up on page one.
+    private func waitForPager(timeout: Duration = .seconds(3)) async {
+        let deadline = ContinuousClock.now + timeout
+        while pager.isLoading || pager.isLoadingMore {
+            guard ContinuousClock.now < deadline, !Task.isCancelled else { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// The floor worth remembering right now, if any.
+    ///
+    /// `isRestoring` covers the window between "the screen opened" and "it
+    /// landed on its page": the rows in the list there belong to whichever page
+    /// the jump left behind, and remembering them would overwrite the reader's
+    /// real position with it.
+    func readingPosition(visiblePid: String?, isRestoring: Bool) -> (pid: String, position: Int)? {
+        guard !isRestoring,
+              hasLoadedOnce,
+              let visiblePid,
+              let post = posts.first(where: { $0.pid == visiblePid }),
+              post.position > 0 else { return nil }
+        return (visiblePid, post.position)
+    }
+
+    /// The page a floor belongs to, for the reading card: the last *loaded* page
+    /// is the bottom of the window, which is not where a reader who scrolled up
+    /// is looking.
+    func page(ofPid pid: String) -> Int? {
+        guard let post = posts.first(where: { $0.pid == pid }), post.position > 0 else { return nil }
+        let page = Int(ceil(Double(post.position) / Double(max(1, perPage))))
+        return min(pageCount, max(1, page))
     }
 
     /// Jumps to the newest page of the thread. The page count comes from the

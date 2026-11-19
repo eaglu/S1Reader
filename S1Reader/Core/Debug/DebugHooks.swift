@@ -202,6 +202,13 @@ struct ThreadDetailDebugScript {
             try? await Task.sleep(for: .milliseconds(300))
             hooks.setVisiblePid(pid)
         }
+        // S1_PENDING_LINK=<url> hands the app a link while this screen is already
+        // up, which is what tapping the reading card does: the route is applied
+        // from outside, not by the reader navigating.
+        if let raw = env("S1_PENDING_LINK"), let link = URL(string: raw).flatMap(AppDeepLink.parse) {
+            try? await Task.sleep(for: .milliseconds(600))
+            PendingDeepLink.post(link)
+        }
         if let raw = env("S1_VIEW_IMAGE"), let target = URL(string: raw) {
             try? await Task.sleep(for: .milliseconds(1200))
             hooks.openImage(target)

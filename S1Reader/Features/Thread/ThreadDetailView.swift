@@ -118,34 +118,44 @@ struct ThreadDetailView: View {
     }
 
     var body: some View {
-        scrollArea
-            .onChange(of: model.focusPid) { _, pid in
-                guard let pid else { return }
-                reveal(pid)
-                model.focusPid = nil
-            }
-            .onChange(of: visiblePid) { _, pid in
-                PerfProbe.note { $0.visiblePidWrites += 1 }
-                saveReadingPosition(pid)
-            }
-            .onDisappear {
-                saveReadingPosition(visiblePid, immediate: true)
-                // Whatever the reader was in has been left: the card must not
-                // stay behind pointing at a screen that is gone.
-                ReadingLiveActivity.end()
-            }
-            .onChange(of: scenePhase) { _, phase in
-                switch phase {
-                case .active:
-                    // Back in the app, so the island has done its job. Ending it
-                    // here is what keeps it off the Lock Screen once read.
-                    ReadingLiveActivity.end()
-                case .inactive, .background:
-                    publishReadingActivity()
-                default:
-                    break
+        // The list and its reading effects go through a `Group`: one expression
+        // for the whole screen is more than the type checker will take in time.
+        Group {
+            scrollArea
+                .onChange(of: model.focusPid) { _, pid in
+                    guard let pid else { return }
+                    reveal(pid)
+                    model.focusPid = nil
                 }
-            }
+                .onChange(of: visiblePid) { _, pid in
+                    PerfProbe.note { $0.visiblePidWrites += 1 }
+                    saveReadingPosition(pid)
+                }
+                // The reading card can name a page while this very thread is on
+                // screen; the route alone cannot restart a view SwiftUI keeps, so
+                // the jump is taken here too.
+                .onChange(of: app.readingJump) { _, _ in
+                    takeReadingJumpIfMine()
+                }
+                .onDisappear {
+                    saveReadingPosition(visiblePid, immediate: true)
+                    // Whatever the reader was in has been left: the card must not
+                    // stay behind pointing at a screen that is gone.
+                    ReadingLiveActivity.end()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    switch phase {
+                    case .active:
+                        // Back in the app, so the island has done its job. Ending it
+                        // here is what keeps it off the Lock Screen once read.
+                        ReadingLiveActivity.end()
+                    case .inactive, .background:
+                        publishReadingActivity()
+                    default:
+                        break
+                    }
+                }
+        }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.posts.count) {
@@ -162,43 +172,8 @@ struct ThreadDetailView: View {
         .task(id: app.member?.uid) {
             model.syncPollVoterRecord(uid: app.member?.uid ?? "")
         }
-        .task {
-            await model.loadIfNeeded()
-            if let startAtPage {
-                // Reopened from the Live Activity: land on the page that was on
-                // the card, not on the saved reading position.
-                isRestoringPosition = true
-                await model.loadPage(startAtPage)
-                didRestorePosition = true
-                isRestoringPosition = false
-            } else if startAtLastPage {
-                // Page one has to load first either way: only the server's answer
-                // says how many pages there are.
-                isRestoringPosition = true
-                await model.jumpToLastPage()
-                didRestorePosition = true
-                if let pid = model.posts.last?.pid { visiblePid = pid }
-                // Give the list the same beat the saved-position path gets, so
-                // the skeleton is still covering it while the scroll lands.
-                try? await Task.sleep(for: .milliseconds(120))
-                isRestoringPosition = false
-            } else {
-                // Hiding the list until the restored post is scrolled into place keeps
-                // the reader from seeing the top of the thread flash by first.
-                let hasSavedPosition = ReadingProgressStore.shared.position(for: model.summary.tid) != nil
-                if hasSavedPosition { isRestoringPosition = true }
-                await model.restoreReadingPosition()
-                didRestorePosition = true
-                if let pid = model.resumePid {
-                    model.resumePid = nil
-                    try? await Task.sleep(for: .milliseconds(250))
-                    visiblePid = pid
-                }
-                if hasSavedPosition {
-                    try? await Task.sleep(for: .milliseconds(120))
-                    isRestoringPosition = false
-                }
-            }
+        .task(id: landing) {
+            await land()
             // A link from another post may point at a specific floor.
             if let pid = initialFocusPid {
                 await jump(to: pid)
@@ -473,11 +448,105 @@ extension ThreadDetailView {
         }
     }
 
+    /// What this screen has to land on when it opens.
+    ///
+    /// A second tap on the reading card arrives while this very screen is
+    /// already up, and the route that carries it (another `readingThread`) makes
+    /// SwiftUI reuse the view: `@State` — the page in the list — is kept and a
+    /// `.task` without an id never runs again, so the page on the card used to
+    /// be ignored. Keying the landing on the request makes the jump happen
+    /// however the screen got here.
+    private struct Landing: Equatable {
+        let tid: String
+        let page: Int?
+        let lastPage: Bool
+    }
+
+    private var landing: Landing {
+        Landing(tid: model.summary.tid, page: startAtPage, lastPage: startAtLastPage)
+    }
+
+    /// Puts the list where the screen was asked to open it.
+    private func land() async {
+        if let startAtPage {
+            // Reopened from the Live Activity: land on the page the card named,
+            // and do not fetch page one first — that fetch was a second request
+            // whose only job was to be thrown away, and it is what the reader
+            // saw whenever the jump did not take.
+            await landOn(startAtPage)
+            return
+        }
+
+        await model.loadIfNeeded()
+
+        if startAtLastPage {
+            // Page one has to load either way: only the server's answer says how
+            // many pages there are.
+            isRestoringPosition = true
+            await model.jumpToLastPage()
+            didRestorePosition = true
+            if let pid = model.posts.last?.pid { visiblePid = pid }
+            // Give the list the same beat the saved-position path gets, so
+            // the skeleton is still covering it while the scroll lands.
+            try? await Task.sleep(for: .milliseconds(120))
+            isRestoringPosition = false
+            return
+        }
+
+        // Hiding the list until the restored post is scrolled into place keeps
+        // the reader from seeing the top of the thread flash by first.
+        let hasSavedPosition = ReadingProgressStore.shared.position(for: model.summary.tid) != nil
+        if hasSavedPosition { isRestoringPosition = true }
+        await model.restoreReadingPosition()
+        didRestorePosition = true
+        if let pid = model.resumePid {
+            model.resumePid = nil
+            try? await Task.sleep(for: .milliseconds(250))
+            visiblePid = pid
+        }
+        if hasSavedPosition {
+            try? await Task.sleep(for: .milliseconds(120))
+            isRestoringPosition = false
+        }
+    }
+
     /// `S1_WINDOW_PROBE=1` publishes the window of pages the list holds, so a UI
     /// test can count how many pages one gesture added. Empty while reading.
     private var debugWindowProbe: String {
         guard DebugHooks.flag("S1_WINDOW_PROBE") else { return "" }
         return "\(model.firstLoadedPage)-\(model.loadedPages)"
+    }
+
+    /// Lands on `page` with the list hidden, then puts the top of that page under
+    /// the reader's eye.
+    private func landOn(_ page: Int) async {
+        isRestoringPosition = true
+        await model.openAtPage(page)
+        if let pid = model.posts.first?.pid { visiblePid = pid }
+        // The request has been honoured (or the route carried it): no second jump.
+        _ = app.takeReadingJump(for: model.summary.tid)
+        // The same beat the saved-position path gets, so the skeleton still
+        // covers the list while the scroll lands.
+        try? await Task.sleep(for: .milliseconds(120))
+        didRestorePosition = true
+        isRestoringPosition = false
+    }
+
+    /// Takes a page the reading card asked for while this thread was already on
+    /// screen: the route cannot restart a view SwiftUI keeps, so the jump comes
+    /// in through the app model instead.
+    private func takeReadingJumpIfMine() {
+        guard let page = app.takeReadingJump(for: model.summary.tid),
+              page != model.loadedPages else { return }
+        Task { await landOn(page) }
+    }
+
+    /// The page the reader is looking at. The card names this one, so a tap on
+    /// it can come back to the same floors: `loadedPages` is the bottom of the
+    /// window and says nothing about the floor at the top of the screen.
+    private var visiblePage: Int? {
+        guard let visiblePid else { return nil }
+        return model.page(ofPid: visiblePid)
     }
 
     private var canCheckNewReplies: Bool {
@@ -488,10 +557,13 @@ extension ThreadDetailView {
     /// the reader leaves it. A card is only worth showing once the header is
     /// known: an empty title would read as a glitch.
     private func publishReadingActivity() {
-        guard model.hasLoadedOnce, !model.posts.isEmpty else { return }
+        // Nothing to mirror while landing on a page: the numbers in the list
+        // there describe a page the reader is not on, and publishing them is
+        // what made a card say "第 1 页" and then take the reader there.
+        guard model.hasLoadedOnce, !model.posts.isEmpty, !isRestoringPosition else { return }
         let state = ReadingActivityAttributes.ContentState(
             title: model.title,
-            page: model.loadedPages,
+            page: visiblePage ?? model.loadedPages,
             pageCount: model.pageCount,
             author: model.summary.author,
             excerpt: readingExcerpt
@@ -845,22 +917,23 @@ extension ThreadDetailView {
         // While a page is being prepended the binding walks over rows that just
         // arrived; the reader's floor is the anchor taken before the request.
         let target = model.isLoadingEarlier ? earlierAnchorPid : pid
+        // Not while the screen is still landing on its page: the rows in the
+        // list there belong to whatever page the jump has not left yet.
         guard didRestorePosition,
-              let pid = target,
-              let post = model.posts.first(where: { $0.pid == pid }) else { return }
+              let position = model.readingPosition(visiblePid: target, isRestoring: isRestoringPosition)
+        else { return }
 
         let tid = model.summary.tid
-        let position = post.position
         saveTask?.cancel()
 
         guard !immediate else {
-            ReadingProgressStore.shared.save(tid: tid, pid: pid, position: position)
+            ReadingProgressStore.shared.save(tid: tid, pid: position.pid, position: position.position)
             return
         }
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled else { return }
-            ReadingProgressStore.shared.save(tid: tid, pid: pid, position: position)
+            ReadingProgressStore.shared.save(tid: tid, pid: position.pid, position: position.position)
         }
     }
 

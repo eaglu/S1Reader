@@ -15,6 +15,28 @@ final class AppModel {
     /// asking for 提醒 while signed out). 我的 shows the login sheet and clears it.
     var pendingLoginPrompt = false
 
+    /// A page the reading card asked for while its thread was already on screen.
+    /// The route carries the page too, but a route that lands on the screen that
+    /// is already up is not guaranteed to rebuild it — this is the jump itself,
+    /// and the thread screen takes it whichever way it got here.
+    struct ReadingJump: Equatable {
+        let tid: String
+        let page: Int
+    }
+
+    private(set) var readingJump: ReadingJump?
+
+    func requestReadingJump(tid: String, page: Int) {
+        readingJump = ReadingJump(tid: tid, page: max(1, page))
+    }
+
+    /// Hands the jump to the thread it names, once.
+    func takeReadingJump(for tid: String) -> Int? {
+        guard let jump = readingJump, jump.tid == tid else { return nil }
+        readingJump = nil
+        return jump.page
+    }
+
     private var didLoad = false
 
     struct Section: Identifiable {

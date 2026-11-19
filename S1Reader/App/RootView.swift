@@ -96,6 +96,11 @@ struct RootView: View {
             openDebugTargetIfNeeded()
             #endif
             consumePendingLink()
+            // `S1_DL_URL` is the cold-start half of a widget link: the route an
+            // outside tap hands the app, applied with no thread on screen yet.
+            if let raw = DebugHooks.string("S1_DL_URL"), let link = URL(string: raw).flatMap(AppDeepLink.parse) {
+                apply(link)
+            }
             // `S1_PERF_SCROLL` needs a screen to measure in a Release build too,
             // where the DEBUG-only `S1_OPEN` hook does not exist.
             if let tid = PerfProbe.threadID {
@@ -131,6 +136,11 @@ struct RootView: View {
             // The reading Live Activity's way back in: same thread, the page the
             // reader left off on, instead of the one their saved position says.
             tab = 0
+            // The route is what makes the screen appear; the page itself is a
+            // request the thread screen takes. A route that replaces the screen
+            // already showing that thread is not a new view in SwiftUI, so the
+            // page cannot ride on the route alone.
+            model.requestReadingJump(tid: tid, page: page)
             path = [.readingThread(tid: tid, page: page)]
         case .notices:
             tab = 1
