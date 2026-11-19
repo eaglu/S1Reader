@@ -233,9 +233,9 @@ enum HTMLParser {
 
     // MARK: - Text attributes
 
-    /// Quoted text drops one type step (15pt body → 13pt, `.footnote`) so the
+    /// Quoted text drops one type step (17pt body → 15pt, `.subheadline`) so the
     /// card is a layer rather than a second reply.
-    fileprivate static let quoteTextScale: CGFloat = 13.0 / 15.0
+    fileprivate static let quoteTextScale: CGFloat = 15.0 / 17.0
 
     static func fontSize(base: CGFloat) -> CGFloat {
         base * quoteTextScale
@@ -248,7 +248,7 @@ enum HTMLParser {
             // quote cannot outshout the reply around it. The colour is left to
             // the card (QuoteStyle.body): it owns the fill the text sits on, so
             // it is the only place that can hold the contrast floor.
-            var font = Font.system(size: fontSize(base: min(style.size ?? 15 * scale, 15 * scale)))
+            var font = Font.system(size: fontSize(base: min(style.size ?? 17 * scale, 17 * scale)))
             if style.bold { font = font.bold() }
             if style.italic { font = font.italic() }
             string.font = font

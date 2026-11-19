@@ -98,11 +98,11 @@ final class HTMLStructureTests: XCTestCase {
     }
 
     func testQuotedTextStepsDownOneTypeSize() {
-        // The reply body tops out at 15pt, so the quote body lands on 13pt
-        // (`.footnote`): one step down, whatever `font` the author asked for.
-        XCTAssertEqual(HTMLParser.fontSize(base: 15), 13, accuracy: 0.01)
-        XCTAssertEqual(HTMLParser.fontSize(base: 24), 20.8, accuracy: 0.01)
-        XCTAssertLessThan(HTMLParser.fontSize(base: 15), 15)
+        // The reply body is 17pt (`.body`), so the quote body lands on 15pt
+        // (`.subheadline`): one step down, whatever `font` the author asked for.
+        XCTAssertEqual(HTMLParser.fontSize(base: 17), 15, accuracy: 0.01)
+        XCTAssertEqual(HTMLParser.fontSize(base: 24), 21.18, accuracy: 0.01)
+        XCTAssertLessThan(HTMLParser.fontSize(base: 17), 17)
     }
 
     func testQuotedFloorComesFromTheHeaderLink() {

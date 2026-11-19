@@ -429,7 +429,7 @@ private struct QuoteCard: View {
     private func headerRow(_ header: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(header)
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(QuoteStyle.header)
                 .fixedSize(horizontal: false, vertical: true)
             if isControl {

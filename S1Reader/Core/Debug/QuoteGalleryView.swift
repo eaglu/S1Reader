@@ -53,7 +53,7 @@ struct QuoteGalleryView: View {
     }
 
     private var control: String {
-        "正文用的是正常字号：15pt 封顶。引用必须比它小一档，颜色也只淡一点。"
+        "正文用的是正常字号：17pt 封顶。引用必须比它小一档，颜色也只淡一点。"
     }
 
     private var tappable: String {
