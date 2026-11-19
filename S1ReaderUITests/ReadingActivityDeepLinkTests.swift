@@ -105,6 +105,11 @@ final class ReadingActivityDeepLinkTests: XCTestCase {
             let list = matches.element(boundBy: index)
             let value = list.value as? String
             fallback = value ?? fallback
+            // 被压在下面那屏有时帧是空的，这时 isHittable 会直接报
+            // 「Activation point invalid」而不是返回 false，把整条用例拖红。
+            // 先看帧，再问能不能点。
+            let frame = list.frame
+            guard frame.width > 0, frame.height > 0 else { continue }
             if list.isHittable, let value, !value.isEmpty { return value }
         }
         return fallback
