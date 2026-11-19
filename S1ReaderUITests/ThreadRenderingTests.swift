@@ -104,7 +104,13 @@ final class ThreadRenderingTests: XCTestCase {
         guard firstCell.waitForExistence(timeout: 30) else {
             throw XCTSkip("主题列表没加载出来：这条用例需要网络")
         }
-        firstCell.staticTexts.element(boundBy: 0).tap()
+        // 行先以骨架出现，标题晚一拍才填进去。cell 一出现就点，会点到还没填字的
+        // 占位行，报「No matches found for Descendants matching type StaticText」。
+        let firstTitle = firstCell.staticTexts.element(boundBy: 0)
+        guard firstTitle.waitForExistence(timeout: 30) else {
+            throw XCTSkip("主题列表只有骨架、没有可点的标题：这条用例需要网络")
+        }
+        firstTitle.tap()
     }
 
     private func screenshot(named name: String) -> XCTAttachment {

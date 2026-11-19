@@ -46,15 +46,17 @@ final class BottomNewRepliesButtonTests: XCTestCase {
         // 所以列表不会因为“暂无新回复”跳一下。
         let result = app.staticTexts["checkNewReplies"]
         XCTAssertTrue(result.waitForExistence(timeout: 15), "检查完没有把结果显示成一行文本")
-        attach("result", result)
-        // 先量高度（结果一定还在），再等按钮消失。切换带 0.22s 的淡出过渡，
-        // 过渡期间新旧两个视图都在无障碍树里，立刻断言 exists == false 在慢
-        // 机器上会撞进那个窗口——CI 上就是这么红的，和代码行为无关。
-        XCTAssertEqual(result.frame.midY, idleMidY, accuracy: 2, "结果态换了高度，列表会跳")
-        XCTAssertTrue(
-            app.buttons["checkNewReplies"].waitForNonExistence(timeout: 5),
+        // 结果态不是控件：这一行现在是一行静态文本，而不是按钮。
+        // 用 matching(identifier:) 精确按 identifier 查：下标写法
+        // （buttons["checkNewReplies"]）在切换的淡出残影上会给出过期的结果，
+        // CI 与本地都因此误报过“还是按钮”。也不能写成“等它不存在”——等久了
+        // 会等到这一行 4 秒后自己变回按钮的那一下。
+        XCTAssertEqual(
+            app.buttons.matching(identifier: "checkNewReplies").count, 0,
             "结果态不该还是一个按钮"
         )
+        attach("result", result)
+        XCTAssertEqual(result.frame.midY, idleMidY, accuracy: 2, "结果态换了高度，列表会跳")
 
         // 等结果自己退回默认态，按钮可以再点一次。
         let backToIdle = XCTNSPredicateExpectation(
