@@ -28,7 +28,9 @@ struct LinkedThreadView: View {
                     Button("重试") { Task { await load(force: true) } }
                 }
             } else {
-                ProgressView("正在打开帖子…")
+                // The destination is always a thread: show the shape of the
+                // replies while the summary is on the wire instead of a spinner.
+                ThreadSkeletonList()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

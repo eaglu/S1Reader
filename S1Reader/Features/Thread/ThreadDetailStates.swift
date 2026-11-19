@@ -91,6 +91,51 @@ struct SkeletonPostRow: View {
     }
 }
 
+/// How many placeholder rows it takes to cover the list while it is empty.
+/// One row is the fixed height of `SkeletonPostRow` plus its divider; the two
+/// spare rows cover the navigation bar and the thread header on the first-load
+/// path, so a tall screen never shows a bare strip under the last bar.
+enum ThreadSkeletonMetrics {
+    static let rowHeight: CGFloat = 135
+    static let minimumCount = 3
+
+    static func rowCount(for height: CGFloat) -> Int {
+        guard height.isFinite, height > 0 else { return minimumCount }
+        return max(minimumCount, Int(ceil(height / rowHeight)) + 2)
+    }
+}
+
+/// A full screen of placeholder posts. Used while the list has nothing to show
+/// yet, and while a saved reading position is being restored: the reader sees
+/// the shape of the replies from the first frame instead of a spinner.
+struct ThreadSkeletonList: View {
+    /// A fixed count when the caller has already measured the space; otherwise
+    /// the list measures itself, which is what the linked-thread screen needs.
+    var count: Int?
+
+    init(count: Int? = nil) {
+        self.count = count
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let rows = count ?? ThreadSkeletonMetrics.rowCount(for: geometry.size.height)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(0..<rows, id: \.self) { _ in
+                    SkeletonPostRow()
+                    Divider()
+                }
+            }
+            .modifier(ReadableWidth())
+            .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .clipped()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("正在加载回复")
+        .accessibilityIdentifier("threadSkeleton")
+    }
+}
+
 /// A thread that loaded fine but came back without any reply.
 struct ThreadEmptyState: View {
     var body: some View {

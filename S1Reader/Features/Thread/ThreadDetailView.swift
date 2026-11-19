@@ -178,6 +178,9 @@ struct ThreadDetailView: View {
                 await model.jumpToLastPage()
                 didRestorePosition = true
                 if let pid = model.posts.last?.pid { visiblePid = pid }
+                // Give the list the same beat the saved-position path gets, so
+                // the skeleton is still covering it while the scroll lands.
+                try? await Task.sleep(for: .milliseconds(120))
                 isRestoringPosition = false
             } else {
                 // Hiding the list until the restored post is scrolled into place keeps
@@ -330,127 +333,141 @@ extension ThreadDetailView {
         // One pass over the posts per body instead of one per row that appears:
         // the "next page" anchor used to re-filter every floor as it scrolled in.
         let visible = visiblePosts
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ThreadHeaderView(
-                        title: model.title,
-                        author: model.summary.author,
-                        posts: model.totalPosts,
-                        views: model.views,
-                        onAuthorTap: {
-                            sheet = .author(
-                                AuthorProfile(
-                                    authorID: model.summary.authorID,
-                                    name: model.summary.author
+        return GeometryReader { geometry in
+            // Fill at least the visible height plus a spare row: how many posts
+            // fit is a screen question, not a fixed three.
+            let skeletonRowCount = ThreadSkeletonMetrics.rowCount(for: geometry.size.height)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ThreadHeaderView(
+                            title: model.title,
+                            author: model.summary.author,
+                            posts: model.totalPosts,
+                            views: model.views,
+                            onAuthorTap: {
+                                sheet = .author(
+                                    AuthorProfile(
+                                        authorID: model.summary.authorID,
+                                        name: model.summary.author
+                                    )
                                 )
+                            }
+                        )
+    
+                        if let error = model.errorMessage, model.posts.isEmpty {
+                            ThreadErrorState(
+                                message: error,
+                                tid: model.summary.tid,
+                                isLoggedIn: app.isLoggedIn,
+                                onRetry: { Task { await model.reload() } },
+                                onLogin: { sheet = .login }
                             )
                         }
-                    )
     
-                    if let error = model.errorMessage, model.posts.isEmpty {
-                        ThreadErrorState(
-                            message: error,
-                            tid: model.summary.tid,
-                            isLoggedIn: app.isLoggedIn,
-                            onRetry: { Task { await model.reload() } },
-                            onLogin: { sheet = .login }
+                        earlierRow
+    
+                        // First load shows the shape of the replies instead of a spinner
+                        // on an empty page; a thread that really has no reply says so.
+                        if model.posts.isEmpty, model.errorMessage == nil {
+                            if model.isLoading || !model.hasLoadedOnce {
+                                ForEach(0..<skeletonRowCount, id: \.self) { _ in SkeletonPostRow() }
+                            } else {
+                                ThreadEmptyState()
+                            }
+                        }
+    
+                        ForEach(visible) { post in
+                            postRow(post, isLast: post.pid == visible.last?.pid)
+                            // The poll belongs to the thread, not to a floor, but it is
+                            // read directly under the first post: only when that post is
+                            // actually on screen (a jump straight to page 400 has no
+                            // head, and a ballot floating above 40 replies would be a
+                            // stranger thing than no ballot at all).
+                            if post.isFirst {
+                                pollSection
+                            }
+                            if !PerfProbe.diagnostic("S1_PERF_NO_DIVIDER") {
+                                Divider()
+                            }
+                        }
+    
+                        ThreadListFooter(
+                            isLoadingMore: model.isLoadingMore,
+                            hasPosts: !model.posts.isEmpty,
+                            range: model.loadedPageRange,
+                            loaded: model.posts.count,
+                            total: model.totalPosts
                         )
-                    }
     
-                    earlierRow
+                        if let error = model.errorMessage, !model.posts.isEmpty {
+                            InlineNotice(
+                                message: error,
+                                onRetry: { Task { await model.reload() } },
+                                onDismiss: { model.clearError() }
+                            )
+                            .noticeTransition(reduceMotion: reduceMotion)
+                        }
     
-                    // First load shows the shape of the replies instead of a spinner
-                    // on an empty page; a thread that really has no reply says so.
-                    if model.posts.isEmpty, model.errorMessage == nil {
-                        if model.isLoading || !model.hasLoadedOnce {
-                            ForEach(0..<3, id: \.self) { _ in SkeletonPostRow() }
-                        } else {
-                            ThreadEmptyState()
+                        NewRepliesButton(
+                            isChecking: model.isCheckingNewReplies,
+                            message: model.lastCheckMessage,
+                            hasPosts: !model.posts.isEmpty,
+                            isEnabled: canCheckNewReplies
+                        ) {
+                            Task { await model.refreshNewReplies() }
                         }
                     }
-    
-                    ForEach(visible) { post in
-                        postRow(post, isLast: post.pid == visible.last?.pid)
-                        // The poll belongs to the thread, not to a floor, but it is
-                        // read directly under the first post: only when that post is
-                        // actually on screen (a jump straight to page 400 has no
-                        // head, and a ballot floating above 40 replies would be a
-                        // stranger thing than no ballot at all).
-                        if post.isFirst {
-                            pollSection
-                        }
-                        if !PerfProbe.diagnostic("S1_PERF_NO_DIVIDER") {
-                            Divider()
-                        }
+                    .modifier(ReadableWidth())
+                    .scrollTargetLayout()
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: model.errorMessage)
+                    .opacity(isCrossfading ? 0 : 1)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isCrossfading)
+                }
+                .scrollPosition(id: $visiblePid, anchor: .top)
+                .accessibilityIdentifier("threadScroll")
+                .accessibilityValue(debugWindowProbe)
+                .modifier(ScrollMotionObserver(
+                    onOffset: { offset in
+                        PerfProbe.note { $0.scrollOffsetWrites += 1 }
+                        scrollOffset = offset
+                        commitEarlierWhenSettled()
+                    },
+                    onSettled: { settled in
+                        isScrollSettled = settled
+                        commitEarlierWhenSettled()
                     }
-    
-                    ThreadListFooter(
-                        isLoadingMore: model.isLoadingMore,
-                        hasPosts: !model.posts.isEmpty,
-                        range: model.loadedPageRange,
-                        loaded: model.posts.count,
-                        total: model.totalPosts
-                    )
-    
-                    if let error = model.errorMessage, !model.posts.isEmpty {
-                        InlineNotice(
-                            message: error,
-                            onRetry: { Task { await model.reload() } },
-                            onDismiss: { model.clearError() }
-                        )
-                        .noticeTransition(reduceMotion: reduceMotion)
+                ))
+                .modifier(LoadEarlierOnOverscroll(isEnabled: model.hasEarlier) {
+                    Task { await loadEarlierKeepingPlace() }
+                })
+                .opacity(isRestoringPosition || isPinningEarlier ? 0 : 1)
+                // A saved position (or a page jump) hides the list so the top of the
+                // thread never flashes by. The skeleton sits underneath in its place,
+                // so hiding the list does not turn the screen into a spinner.
+                .background(alignment: .top) {
+                    if isRestoringPosition {
+                        ThreadSkeletonList(count: skeletonRowCount)
+                            .transition(.opacity)
                     }
-    
-                    NewRepliesHint(
-                        isChecking: model.isCheckingNewReplies,
-                        message: model.lastCheckMessage,
-                        hasPosts: !model.posts.isEmpty
-                    )
                 }
-                .modifier(ReadableWidth())
-                .scrollTargetLayout()
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: model.errorMessage)
-                .opacity(isCrossfading ? 0 : 1)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isCrossfading)
-            }
-            .scrollPosition(id: $visiblePid, anchor: .top)
-            .accessibilityIdentifier("threadScroll")
-            .accessibilityValue(debugWindowProbe)
-            .modifier(ScrollMotionObserver(
-                onOffset: { offset in
-                    PerfProbe.note { $0.scrollOffsetWrites += 1 }
-                    scrollOffset = offset
-                    commitEarlierWhenSettled()
-                },
-                onSettled: { settled in
-                    isScrollSettled = settled
-                    commitEarlierWhenSettled()
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isRestoringPosition)
+                .contentMargins(.bottom, 72, for: .scrollContent)
+                // A single compact button; the extra bottom margin keeps it clear of the
+                // page footer while the thread scrolls under it. It turns into a way back
+                // once a quote has been followed.
+                .overlay(alignment: .bottomTrailing) {
+                    ThreadActionButton(mode: returnPid == nil ? .reply : .back) {
+                        primaryAction()
+                    }
                 }
-            ))
-            .modifier(LoadEarlierOnOverscroll(isEnabled: model.hasEarlier) {
-                Task { await loadEarlierKeepingPlace() }
-            })
-            .modifier(CheckNewRepliesOnOverscroll(isEnabled: canCheckNewReplies) {
-                Task { await model.refreshNewReplies() }
-            })
-            .opacity(isRestoringPosition || isPinningEarlier ? 0 : 1)
-            .overlay { if isRestoringPosition { ProgressView() } }
-            .contentMargins(.bottom, 72, for: .scrollContent)
-            // A single compact button; the extra bottom margin keeps it clear of the
-            // page footer while the thread scrolls under it. It turns into a way back
-            // once a quote has been followed.
-            .overlay(alignment: .bottomTrailing) {
-                ThreadActionButton(mode: returnPid == nil ? .reply : .back) {
-                    primaryAction()
-                }
-            }
-            .onChange(of: pinRequest) { _, request in
-                guard let request else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(request.pid, anchor: .top)
+                .onChange(of: pinRequest) { _, request in
+                    guard let request else { return }
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        proxy.scrollTo(request.pid, anchor: .top)
+                    }
                 }
             }
         }
