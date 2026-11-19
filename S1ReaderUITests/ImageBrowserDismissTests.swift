@@ -27,7 +27,7 @@ final class ImageBrowserDismissTests: XCTestCase {
     }
 
     func testPullingDownClosesTheViewer() throws {
-        launchViewer()
+        try launchViewer()
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
         // 按住不放一会儿：一是让录制能看清跟手状态，二是确认拖到位后松手才关。
@@ -38,7 +38,7 @@ final class ImageBrowserDismissTests: XCTestCase {
     }
 
     func testShortPullSpringsBack() throws {
-        launchViewer()
+        try launchViewer()
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.47))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
@@ -50,7 +50,7 @@ final class ImageBrowserDismissTests: XCTestCase {
     }
 
     func testPullingDownWhileZoomedPansThePicture() throws {
-        launchViewer(zoom: 2)
+        try launchViewer(zoom: 2)
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.1)
@@ -61,7 +61,7 @@ final class ImageBrowserDismissTests: XCTestCase {
     }
 
     func testSwipingInFromTheLeftEdgeClosesTheViewer() throws {
-        launchViewer()
+        try launchViewer()
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.004, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.1)
@@ -71,7 +71,7 @@ final class ImageBrowserDismissTests: XCTestCase {
     }
 
     func testHorizontalSwipeStillPages() throws {
-        launchViewer()
+        try launchViewer()
         let before = pageTitle()
         XCTAssertNotNil(before, "没读到页码标题")
 
@@ -115,7 +115,7 @@ final class ImageBrowserDismissTests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "image-viewer").firstMatch
     }
 
-    private func launchViewer(zoom: Int? = nil) {
+    private func launchViewer(zoom: Int? = nil) throws {
         app = XCUIApplication()
         app.launchEnvironment["S1_OPEN"] = "thread:\(Self.threadID)"
         app.launchEnvironment["S1_NO_RESTORE"] = "1"
@@ -123,9 +123,11 @@ final class ImageBrowserDismissTests: XCTestCase {
         if let zoom { app.launchEnvironment["S1_ZOOM"] = String(zoom) }
         app.launch()
 
+        // 这几条要从线上主题里开一张图：连不上 stage1st.com 时这里是空的。
+        // 和 EarlierPageOverscrollTests / ThreadRenderingTests 一样跳过，而不是
+        // 红在一条与手势无关的前置上。
         guard closeButton.waitForExistence(timeout: 40) else {
-            XCTFail("图片查看器没打开：这些用例要网络")
-            return
+            throw XCTSkip("图片查看器没打开：这条用例要网络")
         }
         // 等查看器自己报出缩放状态，而不是拿一个固定的 sleep 去猜：慢机器上
         // 拖在"还没进入状态"的查看器上，两种手势的结论会变得完全不一样。
