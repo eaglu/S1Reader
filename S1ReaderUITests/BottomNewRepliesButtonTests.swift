@@ -3,7 +3,8 @@ import XCTest
 /// 底部「检查新回复」：滚到最后一楼，点一下按钮，应该去问服务器。
 ///
 /// 这条以前是一次上拉手势触发的，手势换成了按钮之后，验证的东西没变：
-/// 点一下要真的发出请求，并且把结果显示出来。
+/// 点一下要真的发出请求，并且把结果显示出来。结果本身不是按钮：它是一行
+/// 静态文本，几秒后自己退回可点的默认态。
 final class BottomNewRepliesButtonTests: XCTestCase {
     private let lastPage = 9
     private var app: XCUIApplication!
@@ -16,7 +17,7 @@ final class BottomNewRepliesButtonTests: XCTestCase {
         waitForFullScreenWindow()
         scrollToTheBottom()
 
-        let button = checkButton
+        let button = app.buttons["checkNewReplies"]
         XCTAssertTrue(button.waitForExistence(timeout: 10), "到底了也没看到「检查新回复」按钮")
         attach("at-bottom", button)
         XCTAssertTrue(button.isHittable, "按钮在屏幕外或点不到")
@@ -24,32 +25,54 @@ final class BottomNewRepliesButtonTests: XCTestCase {
         // 整行至少 44pt，手指点得中。滚到底之后按钮要整个露出来，
         // 否则 XCUI 报的是被列表裁掉后的高度。
         XCTAssertGreaterThanOrEqual(button.frame.height, 44, "点击区不到 44pt")
+        let idleMidY = button.frame.midY
 
         button.tap()
 
         // 请求可能很快就回来，所以「正在检查」和三种结果任一个出现都算数。
+        let row = checkRow
         let answered = XCTNSPredicateExpectation(
             predicate: NSPredicate(
-                format: "label CONTAINS %@ OR label CONTAINS %@ OR label == %@ OR label BEGINSWITH %@",
-                "正在检查新回复", "条新回复", "暂无新回复", "检查失败"
+                format: "label == %@ OR label CONTAINS %@ OR label == %@ OR label BEGINSWITH %@",
+                "正在检查…", "条新回复", "暂无新回复", "检查失败"
             ),
-            object: button
+            object: row
         )
         let verdict = XCTWaiter().wait(for: [answered], timeout: 15)
-        attach("after-tap", button)
-        XCTAssertEqual(verdict, .completed, "点了按钮也没有去问服务器，按钮仍是：\(button.label)")
+        attach("after-tap", row)
+        XCTAssertEqual(verdict, .completed, "点了按钮也没有去问服务器，按钮仍是：\(row.label)")
+
+        // 结果降级成一行静态文本：不再是一个按钮，高度和不点之前一样，
+        // 所以列表不会因为“暂无新回复”跳一下。
+        let result = app.staticTexts["checkNewReplies"]
+        XCTAssertTrue(result.waitForExistence(timeout: 15), "检查完没有把结果显示成一行文本")
+        attach("result", result)
+        XCTAssertFalse(app.buttons["checkNewReplies"].exists, "结果态不该还是一个按钮")
+        XCTAssertEqual(result.frame.midY, idleMidY, accuracy: 2, "结果态换了高度，列表会跳")
 
         // 等结果自己退回默认态，按钮可以再点一次。
         let backToIdle = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label == %@", "检查新回复"),
-            object: button
+            object: checkRow
         )
         XCTAssertEqual(
             XCTWaiter().wait(for: [backToIdle], timeout: 12),
             .completed,
-            "结果没有回到默认态，按钮仍是：\(button.label)"
+            "结果没有回到默认态，按钮仍是：\(checkRow.label)"
         )
-        XCTAssertTrue(button.isEnabled, "回到默认态后按钮应该还能再点")
+        XCTAssertTrue(app.buttons["checkNewReplies"].isEnabled, "回到默认态后按钮应该还能再点")
+
+        // 「正在检查」在线路上只停几百毫秒，按下去的瞬间抓不稳。用 hold 钩子
+        // 把它停在原地，单独拍一张，三种状态才算都看得到。
+        app.terminate()
+        launch(jumpingTo: lastPage, extraEnvironment: ["S1_CHECK_NEW_HOLD": "1"])
+        waitForFullScreenWindow()
+        scrollToTheBottom()
+        let checking = app.buttons["checkNewReplies"]
+        XCTAssertTrue(checking.waitForExistence(timeout: 10), "hold 钩子没把行停在检查中")
+        XCTAssertEqual(checking.label, "正在检查…", "检查中文案不对")
+        XCTAssertFalse(checking.isEnabled, "检查中不应该还能再点")
+        attach("checking", checking)
     }
 
     // MARK: - 网络前置
@@ -76,15 +99,19 @@ final class BottomNewRepliesButtonTests: XCTestCase {
         }
     }
 
-    private var checkButton: XCUIElement {
-        app.buttons["checkNewReplies"]
+    /// 三种状态共用同一个 identifier：默认/检查中是按钮，结果是一行静态文本。
+    private var checkRow: XCUIElement {
+        app.descendants(matching: .any)["checkNewReplies"]
     }
 
-    private func launch(jumpingTo page: Int) {
+    private func launch(jumpingTo page: Int, extraEnvironment: [String: String] = [:]) {
         app = XCUIApplication()
         app.launchEnvironment["S1_OPEN"] = "thread:2206666"
         app.launchEnvironment["S1_JUMP_PAGE"] = "\(page)"
         app.launchEnvironment["S1_NO_RESTORE"] = "1"
+        for (key, value) in extraEnvironment {
+            app.launchEnvironment[key] = value
+        }
         app.launch()
         XCTAssertTrue(bodies.element(boundBy: 0).waitForExistence(timeout: 30), "楼层没有渲染出来：这条用例需要网络")
     }
@@ -101,14 +128,26 @@ final class BottomNewRepliesButtonTests: XCTestCase {
         XCTFail("窗口不是全屏（高度 \(window.frame.height)）：app 可能被别的测试挤到后台了")
     }
 
-    /// 一直滑到按钮整个露出来为止：按钮贴在列表最后，滑过头只是回弹。
+    /// 一直滑到整行露在窗口里为止：按钮贴在列表最后，滑过头只是回弹。
+    /// `exists` 对屏幕外的行也是真，所以要量它到底在不在可视区。
     private func scrollToTheBottom() {
-        for _ in 0..<8 {
+        let window = app.windows.firstMatch
+        for _ in 0..<12 {
+            if rowIsFullyVisible(in: window) { break }
             app.swipeUp(velocity: .fast)
-            if checkButton.exists, checkButton.frame.height >= 44 { break }
-            usleep(300_000)
+            usleep(400_000)
         }
         sleep(1)
+        XCTAssertTrue(rowIsFullyVisible(in: window), "滑到底也没把整行露出来")
+    }
+
+    private func rowIsFullyVisible(in window: XCUIElement) -> Bool {
+        let row = checkRow
+        guard row.exists else { return false }
+        let frame = row.frame
+        return frame.height >= 44
+            && frame.minY >= window.frame.minY
+            && frame.maxY <= window.frame.maxY - 8
     }
 
     private var bodies: XCUIElementQuery {

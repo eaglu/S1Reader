@@ -245,6 +245,16 @@ struct ThreadDetailDebugScript {
             let messageText: String = model.lastCheckMessage ?? "-"
             DebugHooks.log("S1_CHECK_NEW added=" + addedText + " message=" + messageText)
         }
+        // S1_CHECK_NEW_HOLD=1 parks the bottom row in its checking state. The
+        // request usually answers in a few hundred milliseconds, which is too
+        // fast to screenshot; this keeps the spinner up for the camera.
+        if env("S1_CHECK_NEW_HOLD") == "1" {
+            for _ in 0..<30 where model.posts.isEmpty {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            model.isCheckingNewReplies = true
+            DebugHooks.log("S1_CHECK_NEW_HOLD parked checking state")
+        }
         // S1_POP=1 pops back to the list so the tab bar's return can be filmed.
         if env("S1_POP") == "1" {
             try? await Task.sleep(for: .milliseconds(2500))
