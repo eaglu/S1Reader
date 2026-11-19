@@ -22,7 +22,15 @@ final class ThreadRenderingTests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        shutDownLeftoverApp()
         app.launch()
+    }
+
+    override func tearDownWithError() throws {
+        // 每条用例结束就把 app 关掉：下一条用例不用从“还有实例在跑”开始，
+        // launch() 里那次隐式 terminate 也就没有机会卡住。
+        if app.state != .notRunning { app.terminate() }
+        app = nil
     }
 
     func testOpeningAThreadRendersEveryFloor() throws {
@@ -69,6 +77,19 @@ final class ThreadRenderingTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// 上一条用例（或上一次崩掉的运行）留下的实例还在跑时，`launch()` 内部那次
+    /// terminate 偶尔立刻失败，报「Failed to terminate com.faye.S1Reader:0」。
+    /// 那是 Xcode 的已知抖动，和被测页面无关。自己先关掉并等它退干净，把抖动
+    /// 挡在 launch() 外面。
+    private func shutDownLeftoverApp() {
+        guard app.state != .notRunning else { return }
+        app.terminate()
+        let deadline = Date().addingTimeInterval(10)
+        while app.state != .notRunning, Date() < deadline {
+            usleep(100_000)
+        }
+    }
 
     private func openSomeThread() throws {
         // A board row is a NavigationLink whose Button does not answer taps, so the
