@@ -31,6 +31,11 @@ struct ReadingLiveActivityWidget: Widget {
                         .font(.caption2)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        // The expanded island's corner curves into the trailing
+                        // region; without this the last digit is clipped.
+                        .padding(.trailing, 10)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.state.title)
