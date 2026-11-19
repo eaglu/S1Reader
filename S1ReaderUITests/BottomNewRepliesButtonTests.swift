@@ -46,29 +46,27 @@ final class BottomNewRepliesButtonTests: XCTestCase {
         // 所以列表不会因为“暂无新回复”跳一下。
         let result = app.staticTexts["checkNewReplies"]
         XCTAssertTrue(result.waitForExistence(timeout: 15), "检查完没有把结果显示成一行文本")
-        // 结果态不是控件：这一行现在是一行静态文本，而不是按钮。
-        // 用 matching(identifier:) 精确按 identifier 查：下标写法
-        // （buttons["checkNewReplies"]）在切换的淡出残影上会给出过期的结果，
-        // CI 与本地都因此误报过“还是按钮”。也不能写成“等它不存在”——等久了
-        // 会等到这一行 4 秒后自己变回按钮的那一下。
+        // 这一行只活 4 秒，而 CI 上每次查询都要将近一秒：先量高度、再查
+        // “不是按钮”，截图放最后，别让后置步骤把结果等没了。
+        XCTAssertEqual(result.frame.midY, idleMidY, accuracy: 2, "结果态换了高度，列表会跳")
+        // 结果态不是控件：这一行现在是一行静态文本，而不是按钮。用
+        // matching(identifier:) 精确按 identifier 查——下标写法
+        // （buttons["checkNewReplies"]）在切换的残影上会给出过期的结果，CI 与
+        // 本地都因此误报过“还是按钮”；也不能改成“等它不存在”，等久了会等到
+        // 这一行 4 秒后自己变回按钮的那一下。
         XCTAssertEqual(
             app.buttons.matching(identifier: "checkNewReplies").count, 0,
             "结果态不该还是一个按钮"
         )
         attach("result", result)
-        XCTAssertEqual(result.frame.midY, idleMidY, accuracy: 2, "结果态换了高度，列表会跳")
 
-        // 等结果自己退回默认态，按钮可以再点一次。
-        let backToIdle = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", "检查新回复"),
-            object: checkRow
-        )
-        XCTAssertEqual(
-            XCTWaiter().wait(for: [backToIdle], timeout: 12),
-            .completed,
-            "结果没有回到默认态，按钮仍是：\(checkRow.label)"
-        )
-        XCTAssertTrue(app.buttons["checkNewReplies"].isEnabled, "回到默认态后按钮应该还能再点")
+        // 等结果自己退回默认态，按钮可以再点一次。用 waitForExistence 而不是
+        // XCTNSPredicateExpectation：行在切换的瞬间会短暂不在无障碍树里，谓词
+        // 求值撞上那个空隙会直接报 “Failed to get matching snapshot”。
+        let idleAgain = app.buttons["checkNewReplies"]
+        XCTAssertTrue(idleAgain.waitForExistence(timeout: 12), "结果没有回到默认态：按钮一直没回来")
+        XCTAssertEqual(idleAgain.label, "检查新回复", "结果没有回到默认态")
+        XCTAssertTrue(idleAgain.isEnabled, "回到默认态后按钮应该还能再点")
 
         // 「正在检查」在线路上只停几百毫秒，按下去的瞬间抓不稳。用 hold 钩子
         // 把它停在原地，单独拍一张，三种状态才算都看得到。
