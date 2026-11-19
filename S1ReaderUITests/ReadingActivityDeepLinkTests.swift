@@ -100,19 +100,32 @@ final class ReadingActivityDeepLinkTests: XCTestCase {
     /// 读屏要读**看得见**的那一个，否则永远读到脚下那一页。
     private func loadedPages() -> String? {
         let matches = app.scrollViews.matching(identifier: "threadScroll")
+        let window = app.windows.firstMatch.frame
         var fallback: String?
         for index in 0..<matches.count {
             let list = matches.element(boundBy: index)
             let value = list.value as? String
             fallback = value ?? fallback
-            // 被压在下面那屏有时帧是空的，这时 isHittable 会直接报
-            // 「Activation point invalid」而不是返回 false，把整条用例拖红。
-            // 先看帧，再问能不能点。
+            // 被压在下面那屏时，元素帧可能是空的或不在窗口里，这时 isHittable
+            // 会直接报「Activation point invalid」把整条用例拖红，而不是返回
+            // false。先用帧筛一道，再去问能不能点。
             let frame = list.frame
-            guard frame.width > 0, frame.height > 0 else { continue }
-            if list.isHittable, let value, !value.isEmpty { return value }
+            guard frame.width > 0, frame.height > 0,
+                  window.width > 0, window.height > 0,
+                  window.intersects(frame) else { continue }
+            if isHittable(list), let value, !value.isEmpty { return value }
         }
         return fallback
+    }
+
+    /// isHittable 在帧退化时是抛错而不是返 false，这里把那种情况当成不可见。
+    private func isHittable(_ element: XCUIElement) -> Bool {
+        var hit = false
+        // strict: false —— 绝大多数调用并不会出错，别让“期望失败没发生”反咬一口。
+        XCTExpectFailure("元素帧不可用：按不可见处理", strict: false) {
+            hit = element.isHittable
+        }
+        return hit
     }
 
     private func attach(_ name: String) {
